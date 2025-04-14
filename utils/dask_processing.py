@@ -297,9 +297,11 @@ def process_submission_group(
 
     # Create a map of comment_id -> comment_row for efficient lookup within this group
     # Drop duplicates just in case, keeping the first occurrence
-    comment_map = group.drop_duplicates(subset=['id']).set_index('id', drop=False) 
+    # Use 'id_x' which is the comment ID after the merge
+    comment_map = group.drop_duplicates(subset=['id_x']).set_index('id_x', drop=False) 
     
-    user_comment_ids_in_submission = list(user_comments['id'].unique())
+    # Use 'id_x' to get user comment IDs
+    user_comment_ids_in_submission = list(user_comments['id_x'].unique())
     user_comment_ids_set = set(user_comment_ids_in_submission) # Use a set for the function
 
     # Find all direct ancestors for *all* user comments in one pass

@@ -26,6 +26,10 @@ from utils.dask_processing import generate_user_context
 
 # Import the helper function
 from tests.test_helpers import _load_or_create_cached_ddf
+from dask.diagnostics import ProgressBar
+
+pbar = ProgressBar()
+pbar.register()
 
 # --- Constants ---
 # Adjust these paths if your data structure is different
@@ -199,7 +203,6 @@ def test_generate_context_sample_user(
     # Check if the DataFrame is empty or not. 
     # It *could* be empty if the selected user has no comments in the data, which might be valid.
     print(f"Result DataFrame head:\n{result_pdf.head()}") # Replaced logging.info
-    # assert not result_pdf.empty, f"Result DataFrame is empty for user {current_test_user}. Check if user exists and has comments."
     
     # Check if expected columns exist in the result
     expected_cols = ['submission_id', 'formatted_context', 'user_comment_ids']
@@ -208,17 +211,6 @@ def test_generate_context_sample_user(
         err_msg = f"Result DataFrame missing expected columns: {missing_result_cols}"
         print(f"ERROR: {err_msg}") # Replaced logging.error
         assert False, err_msg
-
-    # Optional: Add more specific assertions if you know the expected output for TEST_USER
-    # For example:
-    # if not result_pdf.empty:
-    #     assert 'expected_submission_id' in result_pdf['submission_id'].values
-    #     first_row_context = result_pdf['formatted_context'].iloc[0]
-    #     assert isinstance(first_row_context, str)
-    #     assert "title:" in first_row_context # Check if YAML structure seems present
-    #     assert "replies:" in first_row_context
-    #     user_ids_list = result_pdf['user_comment_ids'].iloc[0]
-    #     assert isinstance(user_ids_list, list)
 
     print(f"Test for user {current_test_user} completed successfully.") # Replaced logging.info
 
