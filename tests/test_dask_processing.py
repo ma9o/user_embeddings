@@ -5,12 +5,12 @@ import os
 # import random # No longer needed
 import glob # Add glob import
 # import dask.bag as db # No longer needed for fixtures
-import logging # Import logging
+# import logging # Import logging -> No longer needed
 import pyarrow as pa # Import pyarrow
 import pyarrow.parquet as pq # Import pyarrow.parquet
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging -> No longer needed
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Ensure the utils directory is in the Python path for import
 # This might be handled by pytest configuration or environment variables in a real setup
@@ -20,10 +20,10 @@ sys.path.insert(0, workspace_root)
 
 from utils.dask_processing import generate_user_context
 # Import the new chunked reader and the original one (if still needed elsewhere)
-from utils.zst_io import read_single_zst_ndjson, read_single_zst_ndjson_chunked 
+from utils.zst_io import read_single_zst_ndjson, read_single_zst_ndjson_chunked
 from utils.zst_io import DEFAULT_CHUNK_SIZE # Import chunk size constant
 
-# --- Constants --- 
+# --- Constants ---
 # Adjust these paths if your data structure is different
 COMMENTS_PATH = os.path.join(workspace_root, "data/reddit/comments")
 SUBMISSIONS_PATH = os.path.join(workspace_root, "data/reddit/submissions")
@@ -40,7 +40,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 def comments_ddf():
     """Loads the required columns of the comments Dask DataFrame from ONE .zst file, using a cache.""" # Updated docstring
     if not os.path.exists(COMMENTS_PATH):
-         logging.error(f"Comments directory not found: {COMMENTS_PATH}")
+         print(f"Comments directory not found: {COMMENTS_PATH}") # Replaced logging.error
          pytest.fail(f"Comments directory not found: {COMMENTS_PATH}")
 
     # Define meta for schema consistency
@@ -63,24 +63,24 @@ def comments_ddf():
         if not filepaths:
             raise FileNotFoundError(f"No files matching '{file_pattern}' found in {COMMENTS_PATH}")
         # Find first file, define cache path
-        first_file_path = filepaths[0] 
+        first_file_path = filepaths[0]
         base_filename = os.path.splitext(os.path.basename(first_file_path))[0]
         cache_filename = f"{base_filename}_comments.parquet"
         cache_filepath = os.path.join(CACHE_DIR, cache_filename)
 
         if os.path.exists(cache_filepath):
-            logging.info(f"Loading comments from cache: {cache_filepath}")
+            print(f"Loading comments from cache: {cache_filepath}") # Replaced logging.info
             # Still load the full cache into pandas first, then convert to dask
             pandas_df = pd.read_parquet(cache_filepath)
-            logging.info(f"Loaded {len(pandas_df)} comments from cache.")
+            print(f"Loaded {len(pandas_df)} comments from cache.") # Replaced logging.info
         else:
-            logging.info(f"Cache not found for {os.path.basename(first_file_path)}. Processing chunked and caching...")
+            print(f"Cache not found for {os.path.basename(first_file_path)}. Processing chunked and caching...") # Replaced logging.info
             
             # --- Chunked Processing and Caching ---
             writer = None
             total_rows_written = 0
             # Use chunk size from zst_io
-            chunk_generator = read_single_zst_ndjson_chunked(first_file_path, chunk_size=DEFAULT_CHUNK_SIZE) 
+            chunk_generator = read_single_zst_ndjson_chunked(first_file_path, chunk_size=DEFAULT_CHUNK_SIZE)
             
             try:
                 for i, chunk_df in enumerate(chunk_generator):
@@ -108,7 +108,7 @@ def comments_ddf():
                             try:
                                 chunk_df[col] = chunk_df[col].astype(dtype)
                             except Exception as e:
-                                logging.warning(f"Could not cast column '{col}' to {dtype} in chunk {i}. Error: {e}. Filling with NA/None.")
+                                print(f"WARNING: Could not cast column '{col}' to {dtype} in chunk {i}. Error: {e}. Filling with NA/None.") # Replaced logging.warning
                                 # Fill with NA/None on error to maintain schema
                                 if pd.api.types.is_integer_dtype(dtype) or pd.api.types.is_bool_dtype(dtype):
                                     chunk_df[col] = pd.NA
@@ -124,40 +124,40 @@ def comments_ddf():
                     try:
                          table = pa.Table.from_pandas(chunk_df, schema=pa_schema_comments, preserve_index=False)
                     except Exception as e:
-                         logging.error(f"Error converting chunk {i} to Arrow Table: {e}")
+                         print(f"ERROR: Error converting chunk {i} to Arrow Table: {e}") # Replaced logging.error
                          # Optional: Log problematic chunk data
-                         # logging.error(f"Problematic chunk head:\n{chunk_df.head()}")
-                         # logging.error(f"Problematic chunk dtypes:\n{chunk_df.dtypes}")
-                         # logging.error(f"Expected meta dtypes:\n{meta_comments.dtypes}")
+                         # print(f"Problematic chunk head:\n{chunk_df.head()}") # Example if you want to keep this
+                         # print(f"Problematic chunk dtypes:\n{chunk_df.dtypes}") # Example
+                         # print(f"Expected meta dtypes:\n{meta_comments.dtypes}") # Example
                          continue # Skip this chunk if conversion fails
 
                     if writer is None:
-                        logging.info(f"Creating Parquet writer for: {cache_filepath}")
+                        print(f"Creating Parquet writer for: {cache_filepath}") # Replaced logging.info
                         # Use PyArrow ParquetWriter for schema enforcement and append
                         writer = pq.ParquetWriter(cache_filepath, table.schema)
                     
                     writer.write_table(table)
                     total_rows_written += len(chunk_df)
-                    logging.debug(f"Written chunk {i} ({len(chunk_df)} rows) to {cache_filepath}")
+                    # print(f"DEBUG: Written chunk {i} ({len(chunk_df)} rows) to {cache_filepath}") # Replaced logging.debug - keep commented if not needed
 
             finally:
                 if writer:
                     writer.close()
-                    logging.info(f"Closed Parquet writer. Total rows written: {total_rows_written}")
+                    print(f"Closed Parquet writer. Total rows written: {total_rows_written}") # Replaced logging.info
                     
             # --- Load the newly created cache file ---
             if total_rows_written > 0:
-                 logging.info(f"Loading the newly created comments cache: {cache_filepath}")
+                 print(f"Loading the newly created comments cache: {cache_filepath}") # Replaced logging.info
                  pandas_df = pd.read_parquet(cache_filepath)
-                 logging.info(f"Loaded {len(pandas_df)} comments from generated cache.")
+                 print(f"Loaded {len(pandas_df)} comments from generated cache.") # Replaced logging.info
             else:
-                 logging.warning(f"No rows were written to cache file {cache_filepath}. Creating empty DataFrame.")
+                 print(f"WARNING: No rows were written to cache file {cache_filepath}. Creating empty DataFrame.") # Replaced logging.warning
                  # Create an empty DataFrame matching the meta schema if nothing was written
                  pandas_df = pd.DataFrame(columns=meta_comments.columns).astype(meta_comments.dtypes.to_dict())
 
 
         # --- Convert Pandas DF (from cache or generated) to Dask DF ---
-        logging.info("Converting Pandas DataFrame to Dask DataFrame...")
+        print("Converting Pandas DataFrame to Dask DataFrame...") # Replaced logging.info
         # Ensure correct dtypes based on meta after loading from parquet
         for col, dtype in meta_comments.dtypes.items():
              if col in pandas_df.columns:
@@ -165,9 +165,9 @@ def comments_ddf():
                       try:
                           pandas_df[col] = pandas_df[col].astype(dtype)
                       except Exception as e:
-                           logging.warning(f"Could not cast column '{col}' to {dtype} after loading cache. Error: {e}")
+                           print(f"WARNING: Could not cast column '{col}' to {dtype} after loading cache. Error: {e}") # Replaced logging.warning
              else:
-                  logging.warning(f"Column '{col}' from meta not found in loaded cache DataFrame.")
+                  print(f"WARNING: Column '{col}' from meta not found in loaded cache DataFrame.") # Replaced logging.warning
                   # Add missing columns if necessary before creating Dask DF
                   if pd.api.types.is_integer_dtype(dtype) or pd.api.types.is_bool_dtype(dtype):
                        pandas_df[col] = pd.NA
@@ -186,21 +186,21 @@ def comments_ddf():
         # Check columns match meta
         if not list(ddf.columns) == list(meta_comments.columns):
              mismatch_msg = f"Loaded comments columns {list(ddf.columns)} do not match meta {list(meta_comments.columns)}"
-             logging.error(mismatch_msg)
+             print(f"ERROR: {mismatch_msg}") # Replaced logging.error
              # Log dtypes for debugging
-             logging.error(f"Dask dtypes: {ddf.dtypes}")
-             logging.error(f"Meta dtypes: {meta_comments.dtypes}")
+             print(f"ERROR: Dask dtypes: {ddf.dtypes}") # Replaced logging.error
+             print(f"ERROR: Meta dtypes: {meta_comments.dtypes}") # Replaced logging.error
              assert False, mismatch_msg
              
-        logging.info(f"Successfully created Dask DataFrame for comments. Columns: {list(ddf.columns)}")
+        print(f"Successfully created Dask DataFrame for comments. Columns: {list(ddf.columns)}") # Replaced logging.info
         return ddf
         
     except FileNotFoundError as e:
-        logging.error(str(e))
+        print(f"ERROR: {str(e)}") # Replaced logging.error
         pytest.fail(str(e))
     except Exception as e:
         import traceback
-        logging.error(f"Failed to load/cache comments: {e}", exc_info=True)
+        print(f"ERROR: Failed to load/cache comments: {e}") # Replaced logging.error
         traceback.print_exc()
         pytest.fail(f"Failed to load/cache comments: {e}")
 
@@ -208,7 +208,7 @@ def comments_ddf():
 def submissions_ddf():
     """Loads the required columns of the submissions Dask DataFrame from ONE .zst file, using a cache.""" # Updated docstring
     if not os.path.exists(SUBMISSIONS_PATH):
-         logging.error(f"Submissions directory not found: {SUBMISSIONS_PATH}")
+         print(f"Submissions directory not found: {SUBMISSIONS_PATH}") # Replaced logging.error
          pytest.fail(f"Submissions directory not found: {SUBMISSIONS_PATH}")
 
     # Define meta for schema consistency
@@ -228,23 +228,23 @@ def submissions_ddf():
         if not filepaths:
              raise FileNotFoundError(f"No files matching '{file_pattern}' found in {SUBMISSIONS_PATH}")
         # Find first file, define cache path
-        first_file_path = filepaths[0] 
+        first_file_path = filepaths[0]
         base_filename = os.path.splitext(os.path.basename(first_file_path))[0]
         cache_filename = f"{base_filename}_submissions.parquet"
         cache_filepath = os.path.join(CACHE_DIR, cache_filename)
 
         if os.path.exists(cache_filepath):
-            logging.info(f"Loading submissions from cache: {cache_filepath}")
+            print(f"Loading submissions from cache: {cache_filepath}") # Replaced logging.info
             pandas_df = pd.read_parquet(cache_filepath)
-            logging.info(f"Loaded {len(pandas_df)} submissions from cache.")
+            print(f"Loaded {len(pandas_df)} submissions from cache.") # Replaced logging.info
         else:
-            logging.info(f"Cache not found for {os.path.basename(first_file_path)}. Processing chunked and caching...")
+            print(f"Cache not found for {os.path.basename(first_file_path)}. Processing chunked and caching...") # Replaced logging.info
             
             # --- Chunked Processing and Caching ---
             writer = None
             total_rows_written = 0
             # Use chunk size from zst_io
-            chunk_generator = read_single_zst_ndjson_chunked(first_file_path, chunk_size=DEFAULT_CHUNK_SIZE) 
+            chunk_generator = read_single_zst_ndjson_chunked(first_file_path, chunk_size=DEFAULT_CHUNK_SIZE)
             
             try:
                 for i, chunk_df in enumerate(chunk_generator):
@@ -254,7 +254,7 @@ def submissions_ddf():
                     for col in meta_submissions.columns:
                         if col not in chunk_df:
                             if pd.api.types.is_bool_dtype(meta_submissions[col].dtype):
-                                chunk_df[col] = pd.NA 
+                                chunk_df[col] = pd.NA
                             else:
                                 chunk_df[col] = None
                     chunk_df = chunk_df[list(meta_submissions.columns)] # Reorder
@@ -265,7 +265,7 @@ def submissions_ddf():
                             try:
                                 chunk_df[col] = chunk_df[col].astype(dtype)
                             except Exception as e:
-                                logging.warning(f"Could not cast column '{col}' to {dtype} in submissions chunk {i}. Error: {e}. Filling with NA/None.")
+                                print(f"WARNING: Could not cast column '{col}' to {dtype} in submissions chunk {i}. Error: {e}. Filling with NA/None.") # Replaced logging.warning
                                 if pd.api.types.is_bool_dtype(dtype):
                                     chunk_df[col] = pd.NA
                                 else:
@@ -273,40 +273,40 @@ def submissions_ddf():
                                 try: # Attempt cast again
                                      chunk_df[col] = chunk_df[col].astype(dtype)
                                 except:
-                                     pass 
-                                     
+                                     pass
+
                     # Convert chunk to PyArrow Table
                     try:
                          table = pa.Table.from_pandas(chunk_df, schema=pa_schema_submissions, preserve_index=False)
                     except Exception as e:
-                         logging.error(f"Error converting submissions chunk {i} to Arrow Table: {e}")
+                         print(f"ERROR: Error converting submissions chunk {i} to Arrow Table: {e}") # Replaced logging.error
                          continue # Skip chunk
 
                     if writer is None:
-                        logging.info(f"Creating Parquet writer for: {cache_filepath}")
+                        print(f"Creating Parquet writer for: {cache_filepath}") # Replaced logging.info
                         writer = pq.ParquetWriter(cache_filepath, table.schema)
                     
                     writer.write_table(table)
                     total_rows_written += len(chunk_df)
-                    logging.debug(f"Written chunk {i} ({len(chunk_df)} rows) to {cache_filepath}")
+                    # print(f"DEBUG: Written chunk {i} ({len(chunk_df)} rows) to {cache_filepath}") # Replaced logging.debug
 
             finally:
                 if writer:
                     writer.close()
-                    logging.info(f"Closed Parquet writer. Total rows written: {total_rows_written}")
+                    print(f"Closed Parquet writer. Total rows written: {total_rows_written}") # Replaced logging.info
 
             # --- Load the newly created cache file ---
             if total_rows_written > 0:
-                logging.info(f"Loading the newly created submissions cache: {cache_filepath}")
+                print(f"Loading the newly created submissions cache: {cache_filepath}") # Replaced logging.info
                 pandas_df = pd.read_parquet(cache_filepath)
-                logging.info(f"Loaded {len(pandas_df)} submissions from generated cache.")
+                print(f"Loaded {len(pandas_df)} submissions from generated cache.") # Replaced logging.info
             else:
-                logging.warning(f"No rows were written to cache file {cache_filepath}. Creating empty DataFrame.")
+                print(f"WARNING: No rows were written to cache file {cache_filepath}. Creating empty DataFrame.") # Replaced logging.warning
                 pandas_df = pd.DataFrame(columns=meta_submissions.columns).astype(meta_submissions.dtypes.to_dict())
 
 
         # --- Convert Pandas DF to Dask DF ---
-        logging.info("Converting Pandas DataFrame to Dask DataFrame...")
+        print("Converting Pandas DataFrame to Dask DataFrame...") # Replaced logging.info
         # Ensure correct dtypes based on meta after loading from parquet
         for col, dtype in meta_submissions.dtypes.items():
              if col in pandas_df.columns:
@@ -314,9 +314,9 @@ def submissions_ddf():
                       try:
                            pandas_df[col] = pandas_df[col].astype(dtype)
                       except Exception as e:
-                           logging.warning(f"Could not cast column '{col}' to {dtype} after loading cache. Error: {e}")
+                           print(f"WARNING: Could not cast column '{col}' to {dtype} after loading cache. Error: {e}") # Replaced logging.warning
              else:
-                  logging.warning(f"Column '{col}' from meta not found in loaded cache DataFrame.")
+                  print(f"WARNING: Column '{col}' from meta not found in loaded cache DataFrame.") # Replaced logging.warning
                   # Add missing columns if necessary
                   if pd.api.types.is_bool_dtype(dtype):
                        pandas_df[col] = pd.NA
@@ -335,20 +335,20 @@ def submissions_ddf():
         # Check columns match meta
         if not list(ddf.columns) == list(meta_submissions.columns):
             mismatch_msg = f"Loaded submissions columns {list(ddf.columns)} do not match meta {list(meta_submissions.columns)}"
-            logging.error(mismatch_msg)
-            logging.error(f"Dask dtypes: {ddf.dtypes}")
-            logging.error(f"Meta dtypes: {meta_submissions.dtypes}")
+            print(f"ERROR: {mismatch_msg}") # Replaced logging.error
+            print(f"ERROR: Dask dtypes: {ddf.dtypes}") # Replaced logging.error
+            print(f"ERROR: Meta dtypes: {meta_submissions.dtypes}") # Replaced logging.error
             assert False, mismatch_msg
             
-        logging.info(f"Successfully created Dask DataFrame for submissions. Columns: {list(ddf.columns)}")
+        print(f"Successfully created Dask DataFrame for submissions. Columns: {list(ddf.columns)}") # Replaced logging.info
         return ddf
 
     except FileNotFoundError as e:
-         logging.error(str(e))
+         print(f"ERROR: {str(e)}") # Replaced logging.error
          pytest.fail(str(e))
     except Exception as e:
         import traceback
-        logging.error(f"Failed to load/cache submissions: {e}", exc_info=True)
+        print(f"ERROR: Failed to load/cache submissions: {e}") # Replaced logging.error
         traceback.print_exc()
         pytest.fail(f"Failed to load/cache submissions: {e}")
 
@@ -356,17 +356,17 @@ def submissions_ddf():
 def test_generate_context_sample_user(
     comments_ddf: dd.DataFrame, 
     submissions_ddf: dd.DataFrame,
-    caplog: pytest.LogCaptureFixture
+    #caplog: pytest.LogCaptureFixture -> No longer needed
 ):
     """Tests the generate_user_context function with sample data."""
-    caplog.set_level(logging.INFO)
+    # caplog.set_level(logging.INFO) -> No longer needed
     
     current_test_user = TEST_USER
     if current_test_user is None:
-        logging.info("TEST_USER is None, sampling comments to find a valid user...")
+        print("TEST_USER is None, sampling comments to find a valid user...") # Replaced logging.info
         selected = False
         sample_size = 100 # How many comments to check
-        logging.info(f"Attempting to sample from the head of the last partition (sample size: {sample_size})...") 
+        print(f"Attempting to sample from the head of the last partition (sample size: {sample_size})...") # Replaced logging.info
         try:
             # Take a sample from the head of the *last partition* for efficiency
             # This avoids the slowness of .tail() while still sampling near the end.
@@ -376,7 +376,7 @@ def test_generate_context_sample_user(
                 comments_sample = comments_ddf.compute().head(sample_size) # Sample from pandas directly
             else:
                 # Fallback for safety, though unlikely with current fixture logic
-                logging.warning("Sampling from Dask partition head as underlying data is not Pandas.")
+                print("WARNING: Sampling from Dask partition head as underlying data is not Pandas.") # Replaced logging.warning
                 comments_sample = comments_ddf.partitions[0].head(sample_size, compute=True) # Use first partition head as it's just 1 partition
                 
             if not comments_sample.empty:
@@ -386,21 +386,21 @@ def test_generate_context_sample_user(
                         # Add more bot checks here if needed, e.g., not author.endswith('Bot')
                         current_test_user = author
                         selected = True
-                        logging.info(f"Selected user from sample: {current_test_user}")
+                        print(f"Selected user from sample: {current_test_user}") # Replaced logging.info
                         break # Stop after finding the first valid user
                 
             if not selected:
-                 logging.warning(f"Could not find a suitable user in the sample (size {sample_size}). Skipping test.")
+                 print(f"WARNING: Could not find a suitable user in the sample (size {sample_size}). Skipping test.") # Replaced logging.warning
                  pytest.skip(f"Could not find a non-deleted user in the sample of size {sample_size}.")
                  
         except KeyError as e:
-             logging.error(f"Failed to find column '{e}' in comments sample.", exc_info=True)
+             print(f"ERROR: Failed to find column '{e}' in comments sample.") # Replaced logging.error
              pytest.fail(f"Failed to find column '{e}' in comments sample.")
         except Exception as e:
-            logging.error(f"Failed to sample user from comments: {e}", exc_info=True)
+            print(f"ERROR: Failed to sample user from comments: {e}") # Replaced logging.error
             pytest.fail(f"Failed to sample user from comments: {e}")
             
-    logging.info(f"Testing context generation for user: {current_test_user}")
+    print(f"Testing context generation for user: {current_test_user}") # Replaced logging.info
     
     # Basic check if dataframes loaded (pytest fixtures handle load errors)
     assert comments_ddf is not None
@@ -425,9 +425,9 @@ def test_generate_context_sample_user(
         )
         
         # --- Compute the results ---
-        logging.info("Computing the result Dask DataFrame...")
+        print("Computing the result Dask DataFrame...") # Replaced logging.info
         result_pdf = context_ddf.compute()
-        logging.info(f"Computation finished. Result shape: {result_pdf.shape}")
+        print(f"Computation finished. Result shape: {result_pdf.shape}") # Replaced logging.info
         
     except ValueError as e:
          pytest.fail(f"generate_user_context raised ValueError: {e}")
@@ -445,15 +445,15 @@ def test_generate_context_sample_user(
     output_filename = f"test_output_{current_test_user}.csv"
     output_path = os.path.join(output_dir, output_filename)
     try:
-        logging.info(f"Saving test result artifact to: {output_path}")
+        print(f"Saving test result artifact to: {output_path}") # Replaced logging.info
         result_pdf.to_csv(output_path, index=False)
-        logging.info("Artifact saved successfully.")
+        print("Artifact saved successfully.") # Replaced logging.info
     except Exception as e:
-        logging.warning(f"Failed to save test artifact to {output_path}: {e}")
+        print(f"WARNING: Failed to save test artifact to {output_path}: {e}") # Replaced logging.warning
     
     # Check if the DataFrame is empty or not. 
     # It *could* be empty if the selected user has no comments in the data, which might be valid.
-    logging.info(f"Result DataFrame head:\n{result_pdf.head()}")
+    print(f"Result DataFrame head:\n{result_pdf.head()}") # Replaced logging.info
     # assert not result_pdf.empty, f"Result DataFrame is empty for user {current_test_user}. Check if user exists and has comments."
     
     # Check if expected columns exist in the result
@@ -461,7 +461,7 @@ def test_generate_context_sample_user(
     missing_result_cols = [col for col in expected_cols if col not in result_pdf.columns]
     if missing_result_cols:
         err_msg = f"Result DataFrame missing expected columns: {missing_result_cols}"
-        logging.error(err_msg)
+        print(f"ERROR: {err_msg}") # Replaced logging.error
         assert False, err_msg
 
     # Optional: Add more specific assertions if you know the expected output for TEST_USER
@@ -475,7 +475,7 @@ def test_generate_context_sample_user(
     #     user_ids_list = result_pdf['user_comment_ids'].iloc[0]
     #     assert isinstance(user_ids_list, list)
 
-    logging.info(f"Test for user {current_test_user} completed successfully.")
+    print(f"Test for user {current_test_user} completed successfully.") # Replaced logging.info
 
 # To run this test:
 # 1. Make sure you have pytest installed (`pip install pytest dask distributed pandas pyyaml`)
