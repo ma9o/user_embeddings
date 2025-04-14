@@ -46,6 +46,52 @@ def _get_ancestors(target_comment_id: str, comment_map: pd.DataFrame) -> Set[str
             
     return ancestors
 
+def _get_all_ancestors_optimized(start_comment_ids: Set[str], comment_map: pd.DataFrame) -> Set[str]:
+    """Finds all unique ancestor comment IDs for a set of starting comments within the group."""
+    all_ancestors = set()
+    # Initialize queue with valid starting IDs present in the map
+    queue = {cid for cid in start_comment_ids if cid in comment_map.index}
+    # Keep track of visited nodes (including starts) to prevent cycles and redundant work
+    visited_for_ancestors = set(queue)
+    # Limit total iterations as a safety measure against unexpected data issues
+    max_iterations = len(comment_map) * 2 # Heuristic limit
+    iterations = 0
+
+    while queue and iterations < max_iterations:
+        current_id = queue.pop()
+        iterations += 1
+
+        # Should always be in map if it was added to the queue
+        if current_id not in comment_map.index: 
+            continue 
+            
+        comment = comment_map.loc[current_id]
+        parent_id_full = comment.get("parent_id")
+        
+        if not parent_id_full or not isinstance(parent_id_full, str):
+            continue
+
+        try:
+            parent_type, parent_id_short = parent_id_full.split("_", 1)
+        except ValueError:
+            continue # Skip malformed parent IDs
+
+        # We only care about comment parents (t1)
+        if parent_type == "t1":
+            # Check if the parent comment exists within this submission group
+            if parent_id_short in comment_map.index: 
+                # If we haven't processed this parent yet
+                if parent_id_short not in visited_for_ancestors:
+                    all_ancestors.add(parent_id_short)
+                    visited_for_ancestors.add(parent_id_short)
+                    queue.add(parent_id_short) # Add parent to the queue to find its ancestors
+            # else: Parent comment not in this submission's group - stop traversal up this path
+            
+    if iterations >= max_iterations:
+        print(f"Warning: Ancestor search reached max iterations ({max_iterations}). Might be incomplete.")
+        
+    return all_ancestors
+
 def _build_nested_thread(relevant_comment_ids: Set[str], comment_map: pd.DataFrame) -> List[Dict[str, Any]]:
     """
     Builds the nested comment thread structure containing only relevant comments,
@@ -191,17 +237,21 @@ def _format_context(submission: pd.Series, nested_thread: List[Dict[str, Any]]) 
 def process_submission_group(
     group: pd.DataFrame, 
     target_user: str, 
-    submissions_lookup: Dict[str, pd.Series]
+    # submissions_lookup: Dict[str, pd.Series] # Removed lookup
 ) -> Optional[pd.DataFrame]:
     """
     Processes comments for a single submission (group) to find user comments 
-    and build the minimal conversation context leading to them.
+    and build the minimal conversation context leading to them. 
+    Assumes the input group DataFrame contains merged submission data 
+    (title, selftext, is_self) associated with the comments.
 
     Args:
-        group: Pandas DataFrame containing all comments for a single submission_id (link_id).
+        group: Pandas DataFrame containing all comments for a single submission_id, 
+               merged with submission data. Expected columns include comment fields 
+               ('id', 'author', 'link_id', 'parent_id', 'body', 'created_utc') and 
+               submission fields ('title', 'selftext', 'is_self').
         target_user: The username to filter comments for.
-        submissions_lookup: A pre-computed dictionary mapping submission_id (without prefix) 
-                          to submission data (as Pandas Series).
+        # submissions_lookup: Removed.
 
     Returns:
         A Pandas DataFrame with a single row containing the formatted context 
@@ -216,7 +266,10 @@ def process_submission_group(
 
     # Get the submission ID (link_id) associated with this group
     # Assuming link_id is consistent within the group
-    submission_id_full = group['link_id'].iloc[0] 
+    # Also extract submission details from the first row (should be identical for all rows in group)
+    first_row = group.iloc[0]
+    submission_id_full = first_row.get('link_id') # Get link_id from data
+    
     if not isinstance(submission_id_full, str) or not submission_id_full.startswith("t3_"):
         # Invalid or missing link_id format
         print(f"Warning: Invalid link_id found in group: {submission_id_full}")
@@ -228,32 +281,34 @@ def process_submission_group(
         print(f"Warning: Could not extract short ID from link_id: {submission_id_full}")
         return None
 
-    # Look up submission details using the pre-computed map
-    submission_data = submissions_lookup.get(submission_id_short)
-    if submission_data is None:
-        # Submission data not found (might be in a different partition or missing)
-        # As per requirement, skip this group for now.
-        # print(f"Debug: Submission data not found for ID: {submission_id_short}")
-        return None 
+    # Extract submission data directly from the first row of the group
+    # Use .get() for safety in case merge failed or columns are missing
+    submission_data = pd.Series({
+        'title': first_row.get('title', 'N/A'),
+        'selftext': first_row.get('selftext', ''), # Default to empty string if missing
+        'is_self': first_row.get('is_self', False) # Default to False if missing
+    })
+    
+    # Check if submission data seems valid (at least title is not N/A)
+    # This handles cases where the left merge might not have found a matching submission
+    if submission_data['title'] == 'N/A' and pd.isna(first_row.get('title')): 
+         print(f"Warning: Submission data (title) appears missing for group {submission_id_short}. Skipping.")
+         return None
 
     # Create a map of comment_id -> comment_row for efficient lookup within this group
     # Drop duplicates just in case, keeping the first occurrence
     comment_map = group.drop_duplicates(subset=['id']).set_index('id', drop=False) 
     
     user_comment_ids_in_submission = list(user_comments['id'].unique())
+    user_comment_ids_set = set(user_comment_ids_in_submission) # Use a set for the function
 
-    # Find all direct ancestors for *all* of the user's comments in this submission
-    all_ancestor_ids = set()
-    for comment_id in user_comment_ids_in_submission:
-         if comment_id in comment_map.index: # Ensure the user comment itself exists in the map
-             ancestors = _get_ancestors(comment_id, comment_map)
-             all_ancestor_ids.update(ancestors)
-         else:
-             print(f"Warning: User comment {comment_id} not found in comment_map for submission {submission_id_short}")
-
+    # Find all direct ancestors for *all* user comments in one pass
+    # print(f"DEBUG: Finding ancestors for {len(user_comment_ids_set)} user comments in submission {submission_id_short}")
+    all_ancestor_ids = _get_all_ancestors_optimized(user_comment_ids_set, comment_map)
+    # print(f"DEBUG: Found {len(all_ancestor_ids)} unique ancestors.")
 
     # The set of relevant comments includes the user's comments plus all their unique ancestors
-    relevant_comment_ids = all_ancestor_ids.union(set(user_comment_ids_in_submission))
+    relevant_comment_ids = all_ancestor_ids.union(user_comment_ids_set)
 
     # Build the nested thread structure using only the relevant comments found within this group
     # Requires 'created_utc' column to be present in the group df
@@ -315,62 +370,64 @@ def generate_user_context(
     if missing_submission_cols:
          raise ValueError(f"ddf_submissions is missing required columns: {missing_submission_cols}")
          
-    # Select only necessary columns to potentially reduce data shuffling
-    ddf_comments = ddf_comments[required_comment_cols]
-    ddf_submissions = ddf_submissions[required_submission_cols]
+    # Select only necessary columns early to potentially reduce data shuffling
+    ddf_comments = ddf_comments[required_comment_cols].copy() # Use copy to avoid SettingWithCopyWarning
+    ddf_submissions = ddf_submissions[required_submission_cols].copy()
 
-    # --- Prepare Submissions Lookup ---
-    # This computes the submissions DataFrame and collects it to the client, then broadcasts.
-    # WARNING: This can consume significant memory on the client and workers if ddf_submissions is large.
-    # For larger datasets, consider Dask joins (e.g., ddf_comments.merge(ddf_submissions_indexed)) 
-    # or broadcasting the lookup table more efficiently if using Dask Distributed.
-    print("Computing submissions lookup table (may take time and memory)...")
-    try:
-        # Ensure submission 'id' is string type for consistent indexing
-        ddf_submissions = ddf_submissions.astype({'id': 'string'}) 
-        # Compute the submission data into a Pandas DataFrame
-        submissions_pdf = ddf_submissions.set_index('id', sorted=True).compute() 
-        # Convert to dictionary of Pandas Series for faster lookups within apply
-        submissions_lookup = {index: row for index, row in submissions_pdf.iterrows()}
-        print(f"Submissions lookup table created with {len(submissions_lookup)} entries.")
-        del submissions_pdf # Free memory if possible
-    except Exception as e:
-        print(f"Error computing submissions lookup table: {e}")
-        raise
-
-    # --- Define Output Metadata ---
-    # Metadata for the output of the groupby().apply() operation
-    meta = pd.DataFrame({
-        'submission_id': pd.Series(dtype='string'), # Use Arrow string type
-        'formatted_context': pd.Series(dtype='string'),
-        'user_comment_ids': pd.Series(dtype='object') # Keep as object for lists
-    }).set_index('submission_id') # Set index temporarily for apply, will reset later if needed
-
-    # --- Filter and Group Comments ---
-    # Ensure 'link_id' is usable. Drop rows where it's null or not in the expected format.
-    print("Filtering comments for valid link_id...")
+    # --- Prepare for Merge ---
+    print("Preparing comments and submissions for merge...")
+    # Ensure 'link_id' is usable and extract short submission ID
     ddf_comments = ddf_comments.dropna(subset=['link_id'])
     ddf_comments = ddf_comments[ddf_comments['link_id'].str.startswith('t3_')]
+    # Create 'submission_id_short' column for merging
+    ddf_comments['submission_id_short'] = ddf_comments['link_id'].str.slice(start=3)
     
-    # Optional: Filter comments by target_user *before* grouping if the user is very common.
-    # However, grouping all comments is necessary to reconstruct the full ancestor thread.
-    # ddf_comments_filtered = ddf_comments[ddf_comments['author'] == user_id] # Might filter too much
+    # Ensure submission 'id' is string type for consistent merging
+    ddf_submissions = ddf_submissions.astype({'id': 'string'}) 
+    ddf_comments = ddf_comments.astype({'submission_id_short': 'string'}) # Ensure merge keys match type
+    
+    # --- Perform Dask Merge ---
+    # Merge comments with submission data. Use left merge to keep all comments.
+    print("Merging comments with submissions (constructing Dask graph)...")
+    # Rename submission 'id' to avoid conflict if needed, although merge handles suffixes
+    # ddf_submissions = ddf_submissions.rename(columns={'id': 'submission_id'})
+    ddf_merged = dd.merge(
+        ddf_comments, 
+        ddf_submissions, 
+        left_on='submission_id_short', 
+        right_on='id', 
+        how='left'
+    )
+    print("Merge graph constructed.")
 
-    print(f"Grouping comments by submission ('link_id') for user '{user_id}'...")
-    # Group all comments by the submission they belong to.
-    grouped_comments = ddf_comments.groupby('link_id')
+    # --- Define Output Metadata for Apply --- 
+    # This meta reflects the output of process_submission_group
+    meta_apply = pd.DataFrame({
+        'submission_id': pd.Series(dtype='string'), 
+        'formatted_context': pd.Series(dtype='string'),
+        'user_comment_ids': pd.Series(dtype='object') # Keep as object for lists
+    }).set_index('submission_id') # Index helps Dask understand output structure for apply
 
-    # --- Apply Context Generation Logic ---
-    print("Applying context generation logic to comment groups (constructing Dask graph)...")
-    # Apply the processing function to each group (each submission)
-    user_context_ddf = grouped_comments.apply(
+    # --- Filter and Group Merged Data ---
+    # Now group the *merged* dataframe by the original link_id
+    print(f"Grouping merged data by 'link_id' for user '{user_id}'...")
+    grouped_merged_comments = ddf_merged.groupby('link_id')
+
+    # --- Apply Context Generation Logic --- 
+    print("Applying context generation logic to merged groups (constructing Dask graph)...")
+    # Apply the processing function to each group (submission)
+    # Note: submissions_lookup is no longer passed
+    user_context_ddf = grouped_merged_comments.apply(
         process_submission_group,
         target_user=user_id,
-        submissions_lookup=submissions_lookup, # Broadcast the lookup map
-        meta=meta # Provide output metadata
+        # submissions_lookup=submissions_lookup, # REMOVED
+        meta=meta_apply # Provide output metadata for the apply function
     ).reset_index(drop=True) # Reset index to get submission_id back as a column
 
     print("Dask graph for context generation constructed successfully.")
+    
+    # Final check on columns - should match meta_apply
+    # print(f"Final Dask DataFrame columns: {user_context_ddf.columns}")
     
     # The result is a Dask DataFrame, computation is lazy.
     return user_context_ddf
