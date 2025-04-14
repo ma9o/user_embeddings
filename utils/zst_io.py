@@ -4,9 +4,78 @@ import zstandard as zstd
 import json
 import os
 import glob
-from typing import List, Dict, Any, Optional, Iterable
+from typing import List, Dict, Any, Optional, Iterable, Iterator
 import pandas as pd
 import io # Import io module
+import time # Import time for progress reporting
+
+DEFAULT_CHUNK_SIZE = 5_000_000 # Define a default chunk size
+
+def read_single_zst_ndjson_chunked(
+    filepath: str, 
+    chunk_size: int = DEFAULT_CHUNK_SIZE
+) -> Iterator[pd.DataFrame]:
+    """
+    Reads a Zstandard compressed NDJSON file and yields Pandas DataFrame chunks.
+
+    Args:
+        filepath: Path to the .zst file.
+        chunk_size: Number of records per DataFrame chunk.
+
+    Yields:
+        Pandas DataFrames containing chunks of the data.
+    """
+    records_chunk = []
+    processed_lines = 0
+    total_processed_in_file = 0
+    progress_interval = chunk_size * 5 # Report progress every 5 chunks
+    start_time = time.time()
+    file_basename = os.path.basename(filepath)
+    print(f"Starting chunked extraction for: {file_basename} (chunk size: {chunk_size:,})")
+
+    try:
+        with open(filepath, 'rb') as fh:
+            dctx = zstd.ZstdDecompressor(max_window_size=2**31)
+            with dctx.stream_reader(fh) as reader:
+                text_reader = io.TextIOWrapper(reader, encoding='utf-8', errors='replace') # Replace errors
+                line_num = 0
+                for line in text_reader:
+                    line_num += 1
+                    try:
+                        if line.strip():
+                            records_chunk.append(json.loads(line))
+                            processed_lines += 1
+                            total_processed_in_file += 1
+
+                            if processed_lines >= chunk_size:
+                                yield pd.DataFrame(records_chunk)
+                                records_chunk = [] # Reset chunk
+                                processed_lines = 0 # Reset counter for next chunk
+
+                                # Print progress periodically based on total lines
+                                if total_processed_in_file % progress_interval == 0:
+                                    elapsed_time = time.time() - start_time
+                                    print(f"  ... yielded {total_processed_in_file:,} lines total from {file_basename} ({elapsed_time:.2f}s elapsed)")
+
+                    except json.JSONDecodeError as json_err:
+                        print(f"Warning: Skipping line {line_num} due to JSON decode error in {file_basename}: {json_err} - Line: {line[:100]}...")
+                    # UnicodeDecodeError should be handled by errors='replace' now
+                    except Exception as e:
+                        print(f"Warning: Skipping line {line_num} due to unexpected error ({type(e).__name__}) in {file_basename}: {e} - Line: {line[:100]}...")
+
+                # Yield any remaining records after the loop finishes
+                if records_chunk:
+                    yield pd.DataFrame(records_chunk)
+                    
+        elapsed_time = time.time() - start_time
+        print(f"Finished chunked extraction for {file_basename}. Total lines processed: {total_processed_in_file:,}. Time: {elapsed_time:.2f}s")
+
+    except FileNotFoundError:
+        print(f"Warning: File not found {filepath}, skipping.")
+    except zstd.ZstdError as zstd_err:
+        print(f"Warning: Zstandard decompression error in {filepath}: {zstd_err}, skipping file.")
+    except Exception as e:
+        print(f"Warning: Failed to read {filepath} due to unexpected error ({type(e).__name__}): {e}, skipping file.")
 
 def read_single_zst_ndjson(filepath: str) -> Iterable[Dict[str, Any]]:
     """
@@ -18,6 +87,12 @@ def read_single_zst_ndjson(filepath: str) -> Iterable[Dict[str, Any]]:
     Yields:
         Dictionaries representing the JSON objects parsed from each line.
     """
+    processed_lines = 0
+    progress_interval = 100000 # Print progress every N lines
+    start_time = time.time()
+    file_basename = os.path.basename(filepath)
+    print(f"Starting extraction for: {file_basename}") # Initial message
+
     try:
         with open(filepath, 'rb') as fh:
             # Increase max_window_size further to handle potentially large frames
@@ -33,13 +108,22 @@ def read_single_zst_ndjson(filepath: str) -> Iterable[Dict[str, Any]]:
                         # Line is already decoded by TextIOWrapper
                         if line.strip(): # Avoid empty lines
                             yield json.loads(line)
+                            processed_lines += 1
+                            # Print progress periodically
+                            if processed_lines % progress_interval == 0:
+                                elapsed_time = time.time() - start_time
+                                print(f"  ... processed {processed_lines:,} lines from {file_basename} ({elapsed_time:.2f}s elapsed)")
+
                     except json.JSONDecodeError as json_err:
-                        print(f"Warning: Skipping line due to JSON decode error in {os.path.basename(filepath)}: {json_err} - Line: {line[:100]}...")
+                        print(f"Warning: Skipping line {line_num} due to JSON decode error in {file_basename}: {json_err} - Line: {line[:100]}...")
                     except UnicodeDecodeError as unicode_err:
-                        print(f"Warning: Skipping line due to Unicode decode error in {os.path.basename(filepath)}: {unicode_err} - Line: {line[:100]}...")
+                        print(f"Warning: Skipping line {line_num} due to Unicode decode error in {file_basename}: {unicode_err} - Line: {line[:100]}...")
                     except Exception as e:
                         # Print more specific error info
-                        print(f"Warning: Skipping line due to unexpected error ({type(e).__name__}) in {os.path.basename(filepath)}: {e} - Line: {line[:100]}...")
+                        print(f"Warning: Skipping line {line_num} due to unexpected error ({type(e).__name__}) in {file_basename}: {e} - Line: {line[:100]}...")
+
+        elapsed_time = time.time() - start_time
+        print(f"Finished extraction for {file_basename}. Total lines processed: {processed_lines:,}. Time: {elapsed_time:.2f}s")
                         
     except FileNotFoundError:
         print(f"Warning: File not found {filepath}, skipping.")
