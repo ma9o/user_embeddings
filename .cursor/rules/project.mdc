@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+- Never add try except blocks unless asked
+- Do not add superflous checks for null / empty / non-existing / etc in functions downstream of main execution flows. Rely on the type system as much as possible
+- Use functional, stateless, declarative, compositional style everywhere possible instead of stateful and object-oriented
+- Never keep deprecated code around. If you've just deprecated something, remove it
