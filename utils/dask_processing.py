@@ -403,12 +403,12 @@ def generate_user_context(
     print("Merge graph constructed.")
 
     # --- Define Output Metadata for Apply --- 
-    # This meta reflects the output of process_submission_group
+    # This meta reflects the output of process_submission_group *before* reset_index
     meta_apply = pd.DataFrame({
-        'submission_id': pd.Series(dtype='string'), 
+        'submission_id': pd.Series(dtype='string'), # Should be a column here
         'formatted_context': pd.Series(dtype='string'),
-        'user_comment_ids': pd.Series(dtype='object') # Keep as object for lists
-    }).set_index('submission_id') # Index helps Dask understand output structure for apply
+        'user_comment_ids': pd.Series(dtype='object')
+    })
 
     # --- Filter and Group Merged Data ---
     # Now group the *merged* dataframe by the original link_id

@@ -5,7 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "dask>=2025.3.0",
+    "bokeh>=3.7.2",
+    "dask[distributed]>=2025.3.0",
     "dotenv>=0.9.9",
     "dtale>=3.17.0",
     "faiss-cpu>=1.10.0",

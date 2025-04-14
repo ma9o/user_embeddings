@@ -9,6 +9,8 @@ import glob # Add glob import
 import pyarrow as pa # Import pyarrow
 # No longer need pq here if helper handles writing
 # import pyarrow.parquet as pq # Import pyarrow.parquet
+import time # Add time import
+from dask.distributed import Client, LocalCluster, progress
 
 # Configure logging -> No longer needed
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -26,10 +28,6 @@ from utils.dask_processing import generate_user_context
 
 # Import the helper function
 from tests.test_helpers import _load_or_create_cached_ddf
-from dask.diagnostics import ProgressBar
-
-pbar = ProgressBar()
-pbar.register()
 
 # --- Constants ---
 # Adjust these paths if your data structure is different
@@ -42,6 +40,14 @@ TEST_USER = None
 
 # Ensure cache directory exists
 os.makedirs(CACHE_DIR, exist_ok=True)
+
+# --- Dask Cluster Setup ---
+# Setup local cluster before fixtures might use it implicitly
+print("Setting up local Dask cluster...")
+# Use slightly fewer workers than cores initially, distribute memory
+cluster = LocalCluster(n_workers=5, threads_per_worker=2, memory_limit='20GB')
+client = Client(cluster)
+print(f"Dask dashboard link: {client.dashboard_link}")
 
 # --- Fixtures (Optional but recommended for setup/teardown) ---
 @pytest.fixture(scope="module")
@@ -175,8 +181,12 @@ def test_generate_context_sample_user(
         
         # --- Compute the results ---
         print("Computing the result Dask DataFrame...") # Replaced logging.info
-        result_pdf = context_ddf.compute()
-        print(f"Computation finished. Result shape: {result_pdf.shape}") # Replaced logging.info
+        start_time = time.time() # Start timing
+        future = context_ddf.persist()
+        progress(future)
+        result_pdf = future.compute()
+        end_time = time.time() # End timing
+        print(f"Computation finished. Result shape: {result_pdf.shape}. Time: {end_time - start_time:.2f}s") # Replaced logging.info and added timing
         
     except ValueError as e:
          pytest.fail(f"generate_user_context raised ValueError: {e}")
@@ -214,9 +224,16 @@ def test_generate_context_sample_user(
 
     print(f"Test for user {current_test_user} completed successfully.") # Replaced logging.info
 
+    # --- Dask Cluster Teardown ---
+    print("Shutting down Dask client and cluster...")
+    client.close()
+    cluster.close()
+    print("Dask client and cluster shut down.")
+
 # To run this test:
-# 1. Make sure you have pytest installed (`pip install pytest dask distributed pandas pyyaml`)
-# 2. Ensure your data is in `data/reddit/comments` and `data/reddit/submissions` (as parquet files)
-# 3. Replace TEST_USER with a valid username from your data.
-# 4. Navigate to your project root directory in the terminal.
-# 5. Run `pytest -s` (the -s flag shows print statements). 
+# 1. Make sure you have pytest installed (`pip install pytest dask distributed pandas pyyaml pyarrow`)
+# 2. Ensure distributed is installed: `pip install distributed`
+# 3. Ensure your data is in `data/reddit/comments` and `data/reddit/submissions` (as parquet files)
+# 4. Replace TEST_USER with a valid username from your data or leave as None to sample.
+# 5. Navigate to your project root directory in the terminal.
+# 6. Run `pytest -s tests/test_dask_processing.py`. You should see the dashboard link printed. 
