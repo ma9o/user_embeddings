@@ -163,10 +163,15 @@ def read_zst_ndjson_files(
     # Create a Dask Bag by reading each file
     # Each partition in the bag will likely correspond to one file or part of a file
     bag = db.from_sequence(filepaths).map_partitions(
-        lambda paths: [record for path in paths for record in read_single_zst_ndjson(path)]
+        # lambda paths: [record for path in paths for record in read_single_zst_ndjson(path)]
+        # Use the chunked reader instead
+        lambda paths: pd.concat(
+            [df_chunk for path in paths for df_chunk in read_single_zst_ndjson_chunked(path)],
+            ignore_index=True
+        )
     )
 
-    # Convert the bag of dictionaries to a Dask DataFrame
+    # Convert the bag of dictionaries/DataFrames to a Dask DataFrame
     if meta is None and columns is not None:
         # If no meta, but columns are given, construct basic meta
         # This assumes 'object' dtype, which might not be optimal but avoids inference error
@@ -174,7 +179,8 @@ def read_zst_ndjson_files(
         meta = pd.DataFrame({col: pd.Series(dtype='object') for col in columns})
         
     # Pass the provided or constructed meta to to_dataframe
-    # Dask handles dict conversion internally if meta is a dict
+    # Dask handles dict conversion internally if meta is a dict.
+    # If the bag contains Pandas DataFrames (from chunked reader), to_dataframe will concatenate them.
     ddf = bag.to_dataframe(meta=meta)
 
     # If meta was provided, columns argument is less relevant as meta defines the schema.

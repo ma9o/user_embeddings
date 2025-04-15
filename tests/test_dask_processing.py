@@ -90,6 +90,7 @@ def submissions_ddf():
     # Define meta for schema consistency
     meta_submissions = pd.DataFrame({ # Keep meta definition
         'id': pd.Series(dtype=pd.StringDtype()),
+        'subreddit': pd.Series(dtype=pd.StringDtype()),
         'title': pd.Series(dtype=pd.StringDtype()),
         'selftext': pd.Series(dtype=pd.StringDtype()),
         'is_self': pd.Series(dtype='boolean') # Use nullable boolean
@@ -172,7 +173,7 @@ def test_generate_context_sample_user(
 
     # Ensure required columns exist before calling the function
     required_comment_cols = ['id', 'author', 'link_id', 'parent_id', 'body', 'created_utc']
-    required_submission_cols = ['id', 'title', 'selftext', 'is_self']
+    required_submission_cols = ['id', 'subreddit', 'title', 'selftext', 'is_self']
 
     missing_comment_cols = [col for col in required_comment_cols if col not in comments_ddf.columns]
     missing_submission_cols = [col for col in required_submission_cols if col not in submissions_ddf.columns]

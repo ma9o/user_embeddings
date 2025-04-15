@@ -211,13 +211,32 @@ def _build_nested_thread(relevant_comment_ids: Set[str], comment_map: pd.DataFra
 
 def _format_context(submission: pd.Series, nested_thread: List[Dict[str, Any]]) -> str:
     """Formats the submission and nested comment thread into a YAML string."""
+
+    # Retrieve values and replace pd.NA with empty string
+    subreddit = submission.get("subreddit")
+    subreddit = '' if pd.isna(subreddit) else subreddit
+
+    title = submission.get("title")
+    title = '' if pd.isna(title) else title
+
+    selftext = submission.get("selftext")
+    selftext = '' if pd.isna(selftext) else selftext
+    
+    is_self = submission.get("is_self", False) # Default to False if missing
+    submission_body = selftext if is_self else "[Link Post]"
+    # Handle case where selftext might be empty string even if is_self is True
+    if is_self and not submission_body:
+        submission_body = "[Empty Self Post]" # Or keep as '' if preferred
+
     data = {
-        # Use .get() with defaults for safety
-        "title": submission.get("title", "N/A"),
-        # Check 'is_self' field from submission data
-        "submission_body": submission.get("selftext", "N/A") if submission.get("is_self", False) else "[Link Post]", 
+        "subreddit": subreddit,
+        "title": title,
+        "submission_body": submission_body, 
         "replies": nested_thread
     }
+    
+    # --- Removed Custom YAML representer for pd.NA ---
+
     try:
         # Use safe_dump, allow unicode, don't use aliases/anchors, standard indent
         return yaml.safe_dump(
@@ -226,12 +245,14 @@ def _format_context(submission: pd.Series, nested_thread: List[Dict[str, Any]]) 
             default_flow_style=False, 
             indent=2, # Use 2 spaces for YAML indent
             sort_keys=False # Preserve insertion order where possible
+            # Removed Dumper=yaml.SafeDumper
         )
     except yaml.YAMLError as e:
         # Fallback or logging if YAML formatting fails
         print(f"Warning: YAML formatting failed for submission {submission.get('id', 'UNKNOWN')}: {e}")
         # Return a basic string representation as fallback
-        return f"Title: {data['title']}\nSubmission Body: {data['submission_body']}\nReplies: {str(data['replies'])}"
+        # Include subreddit in fallback as well
+        return f"Subreddit: {data['subreddit']}\nTitle: {data['title']}\nSubmission Body: {data['submission_body']}\nReplies: {str(data['replies'])}"
 
 
 def process_submission_group(
@@ -249,7 +270,7 @@ def process_submission_group(
         group: Pandas DataFrame containing all comments for a single submission_id, 
                merged with submission data. Expected columns include comment fields 
                ('id', 'author', 'link_id', 'parent_id', 'body', 'created_utc') and 
-               submission fields ('title', 'selftext', 'is_self').
+               submission fields ('subreddit', 'title', 'selftext', 'is_self').
         target_user: The username to filter comments for.
         # submissions_lookup: Removed.
 
@@ -284,6 +305,7 @@ def process_submission_group(
     # Extract submission data directly from the first row of the group
     # Use .get() for safety in case merge failed or columns are missing
     submission_data = pd.Series({
+        'subreddit': first_row.get('subreddit', 'N/A'),
         'title': first_row.get('title', 'N/A'),
         'selftext': first_row.get('selftext', ''), # Default to empty string if missing
         'is_self': first_row.get('is_self', False) # Default to False if missing
@@ -348,7 +370,7 @@ def generate_user_context(
         ddf_comments: Dask DataFrame of comments. 
                       Requires columns: 'id', 'author', 'link_id', 'parent_id', 'body', 'created_utc'.
         ddf_submissions: Dask DataFrame of submissions.
-                         Requires columns: 'id', 'title', 'selftext', 'is_self'.
+                         Requires columns: 'id', 'subreddit', 'title', 'selftext', 'is_self'.
 
     Returns:
         A Dask DataFrame with columns:
@@ -367,7 +389,7 @@ def generate_user_context(
     if missing_comment_cols:
          raise ValueError(f"ddf_comments is missing required columns: {missing_comment_cols}")
 
-    required_submission_cols = ['id', 'title', 'selftext', 'is_self']
+    required_submission_cols = ['id', 'subreddit', 'title', 'selftext', 'is_self']
     missing_submission_cols = [col for col in required_submission_cols if col not in ddf_submissions.columns]
     if missing_submission_cols:
          raise ValueError(f"ddf_submissions is missing required columns: {missing_submission_cols}")
