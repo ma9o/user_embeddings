@@ -16,7 +16,7 @@ if workspace_root not in sys.path:
 
 # Import from utils AFTER potentially modifying sys.path
 try:
-    from utils.zst_io import read_single_zst_ndjson_chunked, DEFAULT_CHUNK_SIZE 
+    from user_embeddings.utils.zst_io import read_single_zst_ndjson_chunked, DEFAULT_CHUNK_SIZE 
 except ImportError as e:
     print(f"ERROR: Failed to import from utils.zst_io. Check sys.path and file existence. Error: {e}")
     # Optionally re-raise or handle appropriately

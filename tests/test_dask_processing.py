@@ -21,13 +21,13 @@ import sys
 workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, workspace_root)
 
-from utils.dask_processing import generate_user_context
+from user_embeddings.utils.dask_processing import generate_user_context
 # No longer need zst_io imports here if helper handles reading/chunking
 # from utils.zst_io import read_single_zst_ndjson_chunked
 # from utils.zst_io import DEFAULT_CHUNK_SIZE
 
 # Import the helper function
-from tests.test_helpers import _load_or_create_cached_ddf
+from .test_helpers import _load_or_create_cached_ddf
 
 # --- Constants ---
 # Adjust these paths if your data structure is different
