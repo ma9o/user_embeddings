@@ -6,3 +6,4 @@ data/
 __pycache__/
 .pytest_cache/
 data/test_cache/
+repomix-output.xml
