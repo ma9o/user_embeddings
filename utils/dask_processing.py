@@ -371,66 +371,90 @@ def generate_user_context(
     missing_submission_cols = [col for col in required_submission_cols if col not in ddf_submissions.columns]
     if missing_submission_cols:
          raise ValueError(f"ddf_submissions is missing required columns: {missing_submission_cols}")
-         
-    # Select only necessary columns early to potentially reduce data shuffling
-    ddf_comments = ddf_comments[required_comment_cols].copy() # Use copy to avoid SettingWithCopyWarning
-    ddf_submissions = ddf_submissions[required_submission_cols].copy()
 
-    # --- Prepare for Merge ---
-    print("Preparing comments and submissions for merge...")
+    # --- Early Filtering for Efficiency ---
+    print(f"Filtering comments for user '{user_id}' to find relevant submissions...")
+    user_comments = ddf_comments[ddf_comments['author'] == user_id][['link_id']].dropna().drop_duplicates()
+    
+    # Compute the relevant submission IDs (link_ids). 
+    # This is necessary to use them for filtering other dataframes.
+    relevant_link_ids = user_comments['link_id'].compute().tolist()
+    
+    if not relevant_link_ids:
+         print(f"No comments found for user '{user_id}'. Returning empty DataFrame.")
+         # Define meta for the empty dataframe to match expected output
+         meta_empty = pd.DataFrame({
+            'submission_id': pd.Series(dtype='string'),
+            'formatted_context': pd.Series(dtype='string'),
+            'user_comment_ids': pd.Series(dtype='object')
+         })
+         return dd.from_pandas(meta_empty, npartitions=1) # Return an empty Dask DF with correct meta
+
+    print(f"Found {len(relevant_link_ids)} submissions with comments from user '{user_id}'.")
+
+    # Filter the original comments dataframe to keep only comments from relevant submissions
+    # We need all comments in these submissions, not just the user's, for context.
+    ddf_comments_filtered = ddf_comments[ddf_comments['link_id'].isin(relevant_link_ids)].copy() # Use copy
+
+    # Filter submissions to keep only the relevant ones
+    # Extract the short ID ('s1' from 't3_s1') for filtering submissions
+    relevant_submission_ids_short = [link_id[3:] for link_id in relevant_link_ids if link_id and link_id.startswith('t3_')]
+    ddf_submissions_filtered = ddf_submissions[ddf_submissions['id'].isin(relevant_submission_ids_short)].copy() # Use copy
+
+    # --- Prepare Filtered DataFrames for Merge ---
+    print("Preparing filtered comments and submissions for merge...")
+
+    # Select necessary columns (already done partially by input validation, but good practice)
+    ddf_comments_filtered = ddf_comments_filtered[required_comment_cols].copy() 
+    ddf_submissions_filtered = ddf_submissions_filtered[required_submission_cols].copy()
+
     # Ensure 'link_id' is usable and extract short submission ID
-    ddf_comments = ddf_comments.dropna(subset=['link_id'])
-    ddf_comments = ddf_comments[ddf_comments['link_id'].str.startswith('t3_')]
-    # Create 'submission_id_short' column for merging
-    ddf_comments['submission_id_short'] = ddf_comments['link_id'].str.slice(start=3)
-    
-    # Ensure submission 'id' is string type for consistent merging
-    ddf_submissions = ddf_submissions.astype({'id': 'string'}) 
-    ddf_comments = ddf_comments.astype({'submission_id_short': 'string'}) # Ensure merge keys match type
-    
-    # --- Perform Dask Merge ---
-    # Merge comments with submission data. Use left merge to keep all comments.
-    print("Merging comments with submissions (constructing Dask graph)...")
-    # Rename submission 'id' to avoid conflict if needed, although merge handles suffixes
-    # ddf_submissions = ddf_submissions.rename(columns={'id': 'submission_id'})
-    ddf_merged = dd.merge(
-        ddf_comments, 
-        ddf_submissions, 
-        left_on='submission_id_short', 
-        right_on='id', 
-        how='left'
-    )
-    print("Merge graph constructed.")
+    # Dropna shouldn't be strictly needed due to prior filtering, but safe to keep
+    ddf_comments_filtered = ddf_comments_filtered.dropna(subset=['link_id']) 
+    # Filter for t3_ again just in case (should also be covered)
+    ddf_comments_filtered = ddf_comments_filtered[ddf_comments_filtered['link_id'].str.startswith('t3_')] 
+    ddf_comments_filtered['submission_id_short'] = ddf_comments_filtered['link_id'].str.slice(start=3)
 
-    # --- Define Output Metadata for Apply --- 
+    # Ensure submission 'id' and comment 'submission_id_short' are string type for consistent merging
+    ddf_submissions_filtered = ddf_submissions_filtered.astype({'id': 'string'})
+    ddf_comments_filtered = ddf_comments_filtered.astype({'submission_id_short': 'string'})
+
+    # --- Perform Dask Merge on Filtered Data ---
+    print("Merging filtered comments with filtered submissions (constructing Dask graph)...")
+    ddf_merged = dd.merge(
+        ddf_comments_filtered,
+        ddf_submissions_filtered,
+        left_on='submission_id_short',
+        right_on='id',
+        how='left' # Left merge still appropriate: keep all comments from relevant submissions
+    )
+    print("Filtered merge graph constructed.")
+
+    # --- Define Output Metadata for Apply ---
     # This meta reflects the output of process_submission_group *before* reset_index
     meta_apply = pd.DataFrame({
-        'submission_id': pd.Series(dtype='string'), # Should be a column here
+        'submission_id': pd.Series(dtype='string'),
         'formatted_context': pd.Series(dtype='string'),
         'user_comment_ids': pd.Series(dtype='object')
     })
 
-    # --- Filter and Group Merged Data ---
-    # Now group the *merged* dataframe by the original link_id
-    print(f"Grouping merged data by 'link_id' for user '{user_id}'...")
+    # --- Group Merged Data ---
+    # Group the *merged* dataframe by the original link_id
+    # Grouping only relevant submissions now
+    print(f"Grouping filtered merged data by 'link_id'...")
     grouped_merged_comments = ddf_merged.groupby('link_id')
 
-    # --- Apply Context Generation Logic --- 
-    print("Applying context generation logic to merged groups (constructing Dask graph)...")
+    # --- Apply Context Generation Logic ---
+    print("Applying context generation logic to filtered groups (constructing Dask graph)...")
     # Apply the processing function to each group (submission)
-    # Note: submissions_lookup is no longer passed
     user_context_ddf = grouped_merged_comments.apply(
         process_submission_group,
         target_user=user_id,
-        # submissions_lookup=submissions_lookup, # REMOVED
-        meta=meta_apply # Provide output metadata for the apply function
+        meta=meta_apply # Provide output metadata
     ).reset_index(drop=True) # Reset index to get submission_id back as a column
 
     print("Dask graph for context generation constructed successfully.")
-    
-    # Final check on columns - should match meta_apply
-    # print(f"Final Dask DataFrame columns: {user_context_ddf.columns}")
-    
+
     # The result is a Dask DataFrame, computation is lazy.
     return user_context_ddf
 
