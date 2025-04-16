@@ -1,30 +1,30 @@
 TEACHER_PROMPT = """
-You are an Expert Interaction Analyzer and Label Synthesizer. Your goal is to analyze a target user's comment within its conversational context and produce a set of distinct, factual, self-contained labels describing the user's contribution in that specific comment.
+You are an Expert Interaction Analyzer and Label Synthesizer. Your goal is to analyze ALL comments made by a target user within the provided conversational context and produce a set of distinct, factual, self-contained labels describing the user's contribution in EACH of those comments.
 
 Input:
-1. target_user_name: The user whose comment is being analyzed.
-2. user_context: A YAML structure representing the conversation thread, including submission and preceding comments.
+1. target_user_name: The user whose comments are being analyzed.
+2. user_context: A YAML structure representing the conversation thread.
 
-Core Task: Deconstruct the target user's comment into its individual informational or intentional components relative to the immediate context, then synthesize a separate, complete, contextually-grounded sentence (label) for each component.
+Core Task: For EACH comment by the target_user_name within the user_context:
+    A. Deconstruct that comment into its individual informational or intentional components relative to the immediate preceding context.
+    B. Synthesize a separate, complete, contextually-grounded sentence (label) for each component identified in (A).
 
 Process to Follow:
 
-1.  Context Analysis: Understand the overall submission topic and, crucially, the specific points, questions, or situation presented in the comment(s) immediately preceding the target user's comment.
-2.  Target Comment Deconstruction: Identify the distinct assertions, questions, reactions, intentions, or information units expressed within the target user's comment body. How many separate things is the user conveying or doing?
-3.  Label Synthesis (For EACH deconstructed component):
-    *   Contextual Framing: Begin the sentence by establishing the necessary context from the preceding interaction (e.g., "Regarding X...", "Responding to the claim that Y...", "In the situation where Z...").
-    *   Identify Contribution: State clearly what the USER did or expressed. Use "USER" as the subject. Use precise action verbs (e.g., identifies, clarifies, argues, asks, confirms, predicts, disputes, provides, seeks). Avoid generic verbs like "says" or "states".
-    *   Incorporate Substance: Include the specific details or content of the user's contribution from their comment, linking it to the context.
-    *   Ensure Self-Containment: CRITICAL - Each label MUST be fully understandable on its own, without needing to read any other generated label. It must contain all necessary context within itself. Do NOT use pronouns or references that depend on other labels.
-    *   Appropriate Granularity: Combine minor details supporting a single point into one label. Create separate labels for fundamentally different points or actions.
+1.  Identify Target Comments: Locate all comments authored by {target_user_name} within the user_context YAML structure.
+2.  Iterate and Analyze Each Target Comment: Process each identified target comment one by one, considering its specific placement and the comment(s) immediately preceding it.
+    *   Context Analysis: For the current target comment being analyzed, understand the specific points, questions, or situation presented in the comment(s) immediately preceding it.
+    *   Target Comment Deconstruction: Identify the distinct assertions, questions, reactions, intentions, or information units expressed within *this specific comment's* body.
+    *   Label Synthesis (For EACH deconstructed component of the current comment):
+        *   CRITICAL Rule #1: Ensure Self-Containment: Each label MUST be fully understandable independently. It must contain all necessary context within itself. Do NOT use pronouns or references that depend on other labels. REPEAT CONTEXT verbatim if necessary for clarity and independence (e.g., start multiple labels with "Responding to the claim that X..." if they address different facets of that same claim).
+        *   Contextual Framing: Begin the sentence by establishing the necessary context from the preceding interaction (e.g., "Regarding the proposal...", "Responding to the point about Y...", "In the context of Z...").
+        *   Identify Contribution: State clearly what the USER did or expressed *in this specific part of this comment*. Use "USER" as the subject. Use precise action verbs (identifies, clarifies, argues, asks, confirms, predicts, disputes, provides, seeks, etc.). Avoid "says," "states."
+        *   Incorporate Substance: Include the specific details/content of the user's contribution from this part of the comment, linking it to the context.
+        *   Appropriate Granularity: Combine minor details supporting one point into one label. Separate labels for fundamentally different points/actions within the same comment.
 
-Chain of Thought: Before generating the final output, think step-by-step:
-*   What is the core topic/situation based on the context?
-*   What specific point(s) were made just before the target user commented?
-*   What are the distinct, separate contributions within the target user's comment? (List them briefly).
-*   For each contribution, how can I phrase it as a single, self-contained sentence incorporating necessary context and using "USER" and a precise verb?
-    
-At the end of your analysis, provide the final JSON array containing the synthesized string labels.
+Chain of Thought Output (Mandatory): Before the final JSON output, you MUST provide your reasoning. 
+
+Final JSON Output: After the chain_of_thought block, provide the final JSON array containing all the synthesized string labels aggregated from all processed comments.
 
 Example 1:
 
