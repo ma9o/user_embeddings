@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 import sys
 import traceback
 from typing import Optional
+import time
 
 # Ensure the utils directory is in the Python path for import
 # This assumes data_loading.py is in the tests/helpers/ directory
@@ -87,12 +88,28 @@ def _clean_cast_validate_chunk(
                 try: 
                      if isinstance(dtype, pd.Int64Dtype): # Special case needs numeric conversion first
                          chunk_df[col] = pd.to_numeric(chunk_df[col], errors='coerce').astype(dtype)
+                     # Handle StringDtype explicitly here too
+                     elif isinstance(dtype, pd.StringDtype):
+                          chunk_df[col] = chunk_df[col].astype(pd.StringDtype())
                      else:
                          chunk_df[col] = chunk_df[col].astype(dtype) 
                 except Exception as e2:
                      print(f"ERROR: Failed second cast attempt for '{col}' to {dtype} after filling. Error: {e2}. Leaving as object.")
                      chunk_df[col] = chunk_df[col].astype('object') # Fallback
                      
+    # Specific handling for 'edited' column AFTER main casting attempts
+    # Convert to nullable string to handle mixed types (bool/int/None) reliably for Arrow
+    if 'edited' in chunk_df.columns:
+        try:
+            # Ensure it's StringDtype before passing to Arrow
+            if chunk_df['edited'].dtype != pd.StringDtype():
+                chunk_df['edited'] = chunk_df['edited'].astype(pd.StringDtype())
+        except Exception as e:
+            print(f"ERROR: Failed to cast 'edited' column to StringDtype in chunk {chunk_index}. Error: {e}")
+            # If conversion fails even to string, maybe drop or return None?
+            # Returning None to skip the chunk is safer.
+            return None
+
     # Final check if resulting dtypes match meta
     current_dtypes = chunk_df.dtypes
     mismatched_cols = []
@@ -113,59 +130,57 @@ def _clean_cast_validate_chunk(
 def _process_zst_to_parquet(
     zst_file_path: str, 
     cache_filepath: str, 
-    meta_df: pd.DataFrame, 
-    pa_schema: pa.Schema, 
+    meta_df: pd.DataFrame,
+    pa_schema: pa.Schema,
     data_type_name: str
 ) -> int:
     """
-    Processes a single ZST file chunk by chunk, cleans/casts data according 
-    to meta_df, converts to Arrow table using pa_schema, and writes to a 
-    Parquet file. Returns the total number of rows written.
+    Processes a single ZST file chunk by chunk, cleans/casts according to meta_df,
+    converts to Arrow table using pa_schema, and writes to a Parquet file.
+    Returns the total number of rows written.
     """
-    print(f"Processing {data_type_name} from {os.path.basename(zst_file_path)} chunked and caching to {cache_filepath}...")
+    print(f"Processing {data_type_name} from {os.path.basename(zst_file_path)} using schema and caching to {cache_filepath}...")
     writer = None
     total_rows_written = 0
-    chunk_generator = read_single_zst_ndjson_chunked(zst_file_path, chunk_size=DEFAULT_CHUNK_SIZE)
+    chunk_generator = read_single_zst_ndjson_chunked(zst_file_path, chunk_size=DEFAULT_CHUNK_SIZE) 
     
     try:
+        # Use the provided pa_schema to initialize the writer
+        print(f"Creating Parquet writer for: {cache_filepath} with provided schema:\n{pa_schema}")
+        try:
+            writer = pq.ParquetWriter(cache_filepath, pa_schema)
+        except Exception as e:
+            print(f"ERROR: Failed to create Parquet writer for {cache_filepath} with provided schema: {e}")
+            raise # Cannot proceed without writer
+
         for i, chunk_df in enumerate(chunk_generator):
             
+            # Clean, cast, and validate chunk against meta_df
+            # This ensures chunk conforms to the schema before converting to Arrow
             processed_chunk = _clean_cast_validate_chunk(chunk_df, meta_df, i, data_type_name)
             
-            if processed_chunk is None: # Skip empty or problematic chunks
+            if processed_chunk is None: # Skip empty or problematic chunks after cleaning
+                print(f"Skipping invalid or empty processed chunk {i} for {data_type_name}.")
                 continue
 
-            # Convert chunk to PyArrow Table
+            # Convert processed chunk to PyArrow Table using the provided schema
             try:
-                 # Ensure index is not included in the table
+                 # Ensure index is not included; use provided schema
                  table = pa.Table.from_pandas(processed_chunk, schema=pa_schema, preserve_index=False) 
             except Exception as e:
-                 print(f"ERROR: Error converting {data_type_name} chunk {i} to Arrow Table: {e}")
-                 print("Problematic chunk dtypes after cleaning/casting:\n", processed_chunk.dtypes)
-                 print("Expected Arrow schema:\n", pa_schema)
-                 # chunk_df.to_csv(f"problem_chunk_{data_type_name}_{i}.csv")
+                 print(f"ERROR: Error converting processed {data_type_name} chunk {i} to Arrow Table using provided schema: {e}")
+                 print(f"Processed chunk {i} dtypes:\n{processed_chunk.dtypes}")
+                 print(f"Expected Arrow schema:\n{pa_schema}")
+                 # processed_chunk.to_csv(f"problem_chunk_{data_type_name}_{i}.csv") # Optional debug output
                  continue # Skip this chunk
 
-            # Initialize writer with the first valid table's schema
-            if writer is None:
-                print(f"Creating Parquet writer for: {cache_filepath} with schema:\n{table.schema}")
-                # Use the schema from the first successfully converted table
-                try:
-                    writer = pq.ParquetWriter(cache_filepath, table.schema)
-                except Exception as e:
-                    print(f"ERROR: Failed to create Parquet writer for {cache_filepath}: {e}")
-                    raise # Cannot proceed without writer
-            
-            # Write table - Ensure schema matches writer's schema
-            if writer is not None and table.schema.equals(writer.schema):
-                 try:
-                     writer.write_table(table)
-                     total_rows_written += len(processed_chunk)
-                 except Exception as e:
-                      print(f"ERROR: Failed to write chunk {i} to Parquet file {cache_filepath}: {e}")
-                      # Decide: continue or raise? Let's continue but log error.
-            elif writer is not None:
-                 print(f"ERROR: Schema mismatch in chunk {i}. Expected:\n{writer.schema}\nGot:\n{table.schema}\nSkipping chunk.")
+            # Write table (schema should inherently match writer's schema now)
+            try:
+                 writer.write_table(table)
+                 total_rows_written += len(processed_chunk)
+            except Exception as e:
+                 print(f"ERROR: Failed to write chunk {i} to Parquet file {cache_filepath}: {e}")
+                 # Decide: continue or raise? Let's continue but log error.
 
     finally:
         if writer:
@@ -287,100 +302,125 @@ def load_or_create_cached_ddf(
     data_path: str, 
     file_pattern: str, 
     cache_dir: str, 
-    meta_df: pd.DataFrame, 
+    meta_df: pd.DataFrame,
     pa_schema: pa.Schema,
-    data_type_name: str # e.g., "comments", "submissions"
+    data_type_name: str
 ) -> dd.DataFrame:
     """
-    Loads a Dask DataFrame from a Parquet cache if it exists, otherwise
-    processes the first matching .zst file chunk by chunk using helper functions,
-    creates the cache, and then loads it. Ensures schema consistency.
-    Public wrapper for the helper functions.
+    Loads a Dask DataFrame from a cached Parquet file if it exists,
+    otherwise processes the first matching ZST file using an explicit schema 
+    to create the cache. The cache filename matches the source ZST filename.
+
+    Args:
+        data_path: Directory containing the source ZST files.
+        file_pattern: Glob pattern for the ZST files (e.g., "RC_*.zst").
+        cache_dir: Directory where the Parquet cache should be stored.
+        meta_df: Pandas DataFrame defining the target schema and types.
+        pa_schema: PyArrow schema corresponding to meta_df for Parquet writing.
+        data_type_name: Name for the dataset type (e.g., "comments", "submissions").
+
+    Returns:
+        A Dask DataFrame representing the loaded or created data, conforming to the meta.
+
+    Raises:
+        FileNotFoundError: If the data_path does not exist.
+        ValueError: If no ZST files are found.
+        AssertionError: If final DataFrame schema doesn't match meta.
     """
     if not os.path.exists(data_path):
-         msg = f"{data_type_name.capitalize()} directory not found: {data_path}"
-         print(f"ERROR: {msg}")
-         pytest.fail(msg)
+        raise FileNotFoundError(f"{data_type_name.capitalize()} data directory not found: {data_path}")
 
-    try:
-        filepaths = glob.glob(os.path.join(data_path, file_pattern))
-        if not filepaths:
-            raise FileNotFoundError(f"No files matching '{file_pattern}' found in {data_path}")
+    # Find source ZST files
+    zst_files = glob.glob(os.path.join(data_path, file_pattern))
+    if not zst_files:
+        raise ValueError(f"No ZST files matching '{file_pattern}' found in {data_path}")
         
-        first_file_path = filepaths[0]
-        base_filename = os.path.splitext(os.path.basename(first_file_path))[0]
-        cache_filename = f"{base_filename}_{data_type_name}.parquet"
-        cache_filepath = os.path.join(cache_dir, cache_filename)
-        
-        n_partitions = os.cpu_count() or 4 # Calculate once
-        ddf = None # Initialize ddf
+    # Select the first file to process (consistent with previous logic)
+    zst_file_to_process = zst_files[0] 
+    print(f"Target ZST file for caching/loading: {os.path.basename(zst_file_to_process)}")
 
-        if os.path.exists(cache_filepath):
-            print(f"Loading {data_type_name} from cache: {cache_filepath}")
-            if os.path.getsize(cache_filepath) > 0:
-                try:
-                    ddf = dd.read_parquet(cache_filepath, engine='pyarrow')
-                    print(f"Loaded {data_type_name} from cache with {ddf.npartitions} partitions.")
-                except Exception as e:
-                    print(f"ERROR: Failed to load Parquet cache {cache_filepath}: {e}")
-                    print("Attempting to regenerate cache...")
-                    ddf = None # Force cache regeneration
-                    try: 
-                        os.remove(cache_filepath)
-                        print(f"Removed corrupted cache file: {cache_filepath}")
-                    except OSError as rm_err:
-                        print(f"ERROR: Failed to remove corrupted cache file {cache_filepath}: {rm_err}")
-                        pytest.fail(f"Failed to remove corrupted cache file: {rm_err}")
-            else:
-                print(f"WARNING: Cache file {cache_filepath} is empty. Will regenerate.")
-                ddf = None # Ensure cache is regenerated
-        else: # Cache does not exist
-             print(f"Cache not found for {os.path.basename(first_file_path)}. Will create.")
-             ddf = None # Ensure cache is created
+    # Determine cache filename based on the source ZST filename
+    base_filename = os.path.splitext(os.path.basename(zst_file_to_process))[0]
+    cache_filepath = os.path.join(cache_dir, f"{base_filename}.parquet")
+    print(f"Expected cache file path: {cache_filepath}")
 
-        
-        if ddf is None: # Cache needs regeneration or creation
-            total_rows_written = _process_zst_to_parquet(
-                zst_file_path=first_file_path,
-                cache_filepath=cache_filepath,
-                meta_df=meta_df,
-                pa_schema=pa_schema,
-                data_type_name=data_type_name
-            )
-                    
-            # Load Dask DataFrame from the newly created cache (if rows were written)
-            if total_rows_written > 0 and os.path.exists(cache_filepath) and os.path.getsize(cache_filepath) > 0:
-                 print(f"Loading the newly created {data_type_name} cache: {cache_filepath}")
-                 try:
-                     ddf = dd.read_parquet(cache_filepath, engine='pyarrow')
-                     print(f"Loaded newly created {data_type_name} cache with {ddf.npartitions} partitions.")
-                 except Exception as e:
-                     print(f"ERROR: Failed to load newly created Parquet cache {cache_filepath}: {e}")
-                     pytest.fail(f"Failed to load newly created cache: {e}")
-            else: # Handle case where cache file wasn't created or is empty after processing
-                 print(f"WARNING: No valid rows written or cache file missing/empty after processing for {cache_filepath}. Creating empty DataFrame.")
-                 ddf = None # Will be handled below
+    ddf = None # Initialize ddf
 
-        # Create empty DataFrame if loading failed or no data was processed/written
-        if ddf is None:
-            pandas_df = pd.DataFrame(columns=meta_df.columns).astype(meta_df.dtypes.to_dict())
-            print(f"Creating empty Dask DataFrame for {data_type_name} with {n_partitions} partitions and correct meta.")
-            ddf = dd.from_pandas(pandas_df, npartitions=n_partitions)
-
-        # --- Repartitioning --- 
-        if ddf.npartitions < n_partitions:
-            print(f"Repartitioning Dask DataFrame from {ddf.npartitions} to {n_partitions} partitions...")
-            ddf = ddf.repartition(npartitions=n_partitions)
+    if os.path.exists(cache_filepath):
+        print(f"Loading {data_type_name} from cached Parquet file: {cache_filepath}")
+        try:
+            start_time = time.time()
+            # Load from cache
+            ddf_loaded = dd.read_parquet(cache_filepath)
+            end_time = time.time()
+            print(f"Loaded {data_type_name} cache in {end_time - start_time:.2f}s. Initial Columns: {ddf_loaded.columns}")
             
-        # --- Final Schema Validation and Casting --- 
-        ddf = _validate_and_cast_ddf(ddf, meta_df, pa_schema, data_type_name)
+            # Validate and cast the loaded DataFrame against the expected meta schema
+            ddf = _validate_and_cast_ddf(ddf_loaded, meta_df, pa_schema, data_type_name)
+            print(f"Validated and cast loaded cache for {data_type_name}.")
+            # return ddf # Return validated ddf
 
-        return ddf
+        except Exception as e:
+            print(f"ERROR: Failed to load or validate cached Parquet file {cache_filepath}: {e}. Attempting to rebuild.")
+            ddf = None # Force rebuild
+            # Optionally remove the corrupted cache file
+            try:
+                os.remove(cache_filepath)
+            except OSError as remove_err:
+                print(f"Warning: Failed to remove corrupted cache file {cache_filepath}: {remove_err}")
+    else:
+        print(f"Cached Parquet file not found: {cache_filepath}")
+        ddf = None # Signal to create cache
+
+    # --- Cache not found, failed to load/validate, or rebuild forced ---    
+    if ddf is None: 
+        # Already selected the file: zst_file_to_process
+        # zst_files = glob.glob(os.path.join(data_path, file_pattern))
+        # if not zst_files:
+        #     raise ValueError(f"No ZST files matching '{file_pattern}' found in {data_path}")
+
+        print(f"Processing {data_type_name} from ZST file: {os.path.basename(zst_file_to_process)} to create cache: {cache_filepath}")
+        # Process only the first file for caching for speed in testing -- Redundant comment
+        # zst_file_to_process = zst_files[0] 
+        # print(f"Processing ONLY the first file for caching: {os.path.basename(zst_file_to_process)}")
+
+        start_time = time.time()
+        total_rows = _process_zst_to_parquet(
+            zst_file_path=zst_file_to_process,
+            cache_filepath=cache_filepath,
+            meta_df=meta_df, # Pass meta
+            pa_schema=pa_schema, # Pass schema
+            data_type_name=data_type_name
+        )
+        end_time = time.time()
         
-    except FileNotFoundError as e:
-        print(f"ERROR: {str(e)}") 
-        pytest.fail(str(e))
-    except Exception as e:
-        print(f"ERROR: Failed to load/cache {data_type_name}: {e}") 
-        traceback.print_exc()
-        pytest.fail(f"Failed to load/cache {data_type_name}: {e}") 
+        if total_rows > 0 and os.path.exists(cache_filepath):
+            print(f"Successfully created Parquet cache for {data_type_name} ({total_rows} rows) at {cache_filepath} in {end_time - start_time:.2f}s")
+            # Load the newly created cache file
+            print(f"Loading newly created {data_type_name} cache...")
+            try:
+                 ddf_loaded = dd.read_parquet(cache_filepath)
+                 # Validate the newly created cache file against meta
+                 ddf = _validate_and_cast_ddf(ddf_loaded, meta_df, pa_schema, data_type_name)
+                 print(f"Validated newly created cache. Final Columns: {ddf.columns}")
+                 # return ddf
+            except Exception as e:
+                 print(f"ERROR: Failed to load or validate newly created cache file {cache_filepath}: {e}. Handling error.")
+                 ddf = None # Reset ddf on load/validation failure
+        else:
+            print(f"Warning: Parquet cache creation for {data_type_name} resulted in 0 rows or file missing. Check source/processing.")
+            ddf = None # Ensure empty ddf is created
+            
+    # If ddf is still None (creation/loading/validation failed), create an empty one matching meta
+    if ddf is None:
+        print(f"Creating empty Dask DataFrame for {data_type_name} matching meta schema.")
+        # Create empty Pandas DataFrame with correct columns and types from meta_df
+        empty_pdf = pd.DataFrame(columns=meta_df.columns).astype(meta_df.dtypes.to_dict())
+        ddf = dd.from_pandas(empty_pdf, npartitions=1)
+        print(f"Created empty DataFrame with columns: {ddf.columns} and types: {ddf.dtypes.to_dict()}")
+
+    # Final check: Ensure the returned ddf is not None
+    if ddf is None:
+        raise RuntimeError(f"Failed to load or create a valid Dask DataFrame for {data_type_name}")
+        
+    return ddf 

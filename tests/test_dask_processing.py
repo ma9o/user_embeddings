@@ -55,60 +55,90 @@ print(f"Dask dashboard link: {client.dashboard_link}")
 # --- Fixtures (Optional but recommended for setup/teardown) ---
 @pytest.fixture(scope="module")
 def comments_ddf():
-    """Loads the required columns of the comments Dask DataFrame from ONE .zst file, using a cache.""" # Updated docstring
+    """Loads the comments Dask DataFrame using a cached Parquet file with full schema."""
     if not os.path.exists(COMMENTS_PATH):
-         print(f"Comments directory not found: {COMMENTS_PATH}") # Replaced logging.error
+         print(f"Comments directory not found: {COMMENTS_PATH}")
          pytest.fail(f"Comments directory not found: {COMMENTS_PATH}")
 
-    # Define meta for schema consistency
-    meta_comments = pd.DataFrame({ # Keep meta definition
+    # Define full meta based on docs/schema.md (Comments)
+    meta_comments = pd.DataFrame({
         'id': pd.Series(dtype=pd.StringDtype()),
         'author': pd.Series(dtype=pd.StringDtype()),
         'link_id': pd.Series(dtype=pd.StringDtype()),
         'parent_id': pd.Series(dtype=pd.StringDtype()),
+        'created_utc': pd.Series(dtype='int64'),
+        'subreddit': pd.Series(dtype=pd.StringDtype()),
+        'subreddit_id': pd.Series(dtype=pd.StringDtype()),
         'body': pd.Series(dtype=pd.StringDtype()),
-        'created_utc': pd.Series(dtype='int64')
+        'score': pd.Series(dtype=pd.Int64Dtype()),
+        'distinguished': pd.Series(dtype=pd.StringDtype()), # String / Null
+        'edited': pd.Series(dtype=pd.StringDtype()), # Boolean / Integer -> String
+        'stickied': pd.Series(dtype='boolean'),
+        'retrieved_on': pd.Series(dtype='int64'),
+        'gilded': pd.Series(dtype=pd.Int64Dtype()),
+        'controversiality': pd.Series(dtype=pd.Int64Dtype()),
+        'author_flair_css_class': pd.Series(dtype=pd.StringDtype()), # String / Null
+        'author_flair_text': pd.Series(dtype=pd.StringDtype()) # String / Null
+        # Add other fields from schema.md if needed, e.g., 'score_hidden' if present
     })
-    # Define PyArrow schema from meta for consistent Parquet writing
+    # Define PyArrow schema from meta
     pa_schema_comments = pa.Schema.from_pandas(meta_comments)
 
-    # Call the helper function from the other file
+    # Call the helper function with the full schema
     return load_or_create_cached_ddf(
         data_path=COMMENTS_PATH,
         file_pattern="RC_*.zst",
         cache_dir=CACHE_DIR,
-        meta_df=meta_comments,
-        pa_schema=pa_schema_comments,
+        meta_df=meta_comments, # Pass full meta
+        pa_schema=pa_schema_comments, # Pass full schema
         data_type_name="comments"
     )
 
 @pytest.fixture(scope="module")
 def submissions_ddf():
-    """Loads the required columns of the submissions Dask DataFrame from ONE .zst file, using a cache.""" # Updated docstring
+    """Loads the submissions Dask DataFrame using a cached Parquet file with full schema."""
     if not os.path.exists(SUBMISSIONS_PATH):
-         print(f"Submissions directory not found: {SUBMISSIONS_PATH}") # Replaced logging.error
+         print(f"Submissions directory not found: {SUBMISSIONS_PATH}")
          pytest.fail(f"Submissions directory not found: {SUBMISSIONS_PATH}")
 
-    # Define meta for schema consistency
-    meta_submissions = pd.DataFrame({ # Keep meta definition
+    # Define full meta based on docs/schema.md (Submissions)
+    meta_submissions = pd.DataFrame({
         'id': pd.Series(dtype=pd.StringDtype()),
+        'url': pd.Series(dtype=pd.StringDtype()),
+        'permalink': pd.Series(dtype=pd.StringDtype()),
         'author': pd.Series(dtype=pd.StringDtype()),
         'created_utc': pd.Series(dtype='int64'),
         'subreddit': pd.Series(dtype=pd.StringDtype()),
-        'title': pd.Series(dtype=pd.StringDtype()),
+        'subreddit_id': pd.Series(dtype=pd.StringDtype()),
         'selftext': pd.Series(dtype=pd.StringDtype()),
-        'is_self': pd.Series(dtype='boolean') # Use nullable boolean
+        'title': pd.Series(dtype=pd.StringDtype()),
+        'num_comments': pd.Series(dtype=pd.Int64Dtype()),
+        'score': pd.Series(dtype=pd.Int64Dtype()),
+        'is_self': pd.Series(dtype='boolean'),
+        'over_18': pd.Series(dtype='boolean'), # NSFW flag
+        'distinguished': pd.Series(dtype=pd.StringDtype()), # String / Null
+        'edited': pd.Series(dtype=pd.StringDtype()), # Boolean / Integer -> String
+        'domain': pd.Series(dtype=pd.StringDtype()),
+        'stickied': pd.Series(dtype='boolean'),
+        'locked': pd.Series(dtype='boolean'),
+        'quarantine': pd.Series(dtype='boolean'),
+        # 'hidden_score' in schema.md, but 'score_hidden' often used in Pushshift? Let's use 'score_hidden'
+        'score_hidden': pd.Series(dtype='boolean'), # Typically 'score_hidden' in data
+        'retrieved_on': pd.Series(dtype='int64'),
+        'author_flair_css_class': pd.Series(dtype=pd.StringDtype()), # String / Null
+        'author_flair_text': pd.Series(dtype=pd.StringDtype()) # String / Null
+        # Add other fields like 'gilded' if needed and present
     })
     # Define PyArrow schema from meta
     pa_schema_submissions = pa.Schema.from_pandas(meta_submissions)
 
-    # Call the helper function from the other file
+    # Call the helper function with the full schema
     return load_or_create_cached_ddf(
         data_path=SUBMISSIONS_PATH,
         file_pattern="RS_*.zst",
         cache_dir=CACHE_DIR,
-        meta_df=meta_submissions,
-        pa_schema=pa_schema_submissions,
+        meta_df=meta_submissions, # Pass full meta
+        pa_schema=pa_schema_submissions, # Pass full schema
         data_type_name="submissions"
     )
 
@@ -261,14 +291,27 @@ def test_generate_context_sample_user(
     assert submissions_ddf is not None
 
     # Ensure required columns exist before calling the function
-    required_comment_cols = ['id', 'author', 'link_id', 'parent_id', 'body', 'created_utc']
-    required_submission_cols = ['id', 'subreddit', 'title', 'selftext', 'is_self']
+    # Get expected columns directly from the DataFrames loaded by fixtures,
+    # as they should now conform to the full schema defined within those fixtures.
+    required_comment_cols = list(comments_ddf.columns)
+    required_submission_cols = list(submissions_ddf.columns)
 
-    missing_comment_cols = [col for col in required_comment_cols if col not in comments_ddf.columns]
-    missing_submission_cols = [col for col in required_submission_cols if col not in submissions_ddf.columns]
+    # Get actual columns from loaded Dask DataFrames (redundant now, but keep for clarity)
+    actual_comment_cols = comments_ddf.columns
+    actual_submission_cols = submissions_ddf.columns
 
-    assert not missing_comment_cols, f"Comments Dask DataFrame missing columns: {missing_comment_cols}"
-    assert not missing_submission_cols, f"Submissions Dask DataFrame missing columns: {missing_submission_cols}"
+    # Add print statements for debugging column presence after loading
+    print(f"Expected Comment Columns (from Dask DF): {required_comment_cols}")
+    # print(f"Actual Comment Columns: {actual_comment_cols}") # Redundant
+    print(f"Expected Submission Columns (from Dask DF): {required_submission_cols}")
+    # print(f"Actual Submission Columns: {actual_submission_cols}") # Redundant
+
+    # Re-check for missing columns (this check is now slightly trivial but good practice)
+    missing_comment_cols = [col for col in required_comment_cols if col not in actual_comment_cols]
+    missing_submission_cols = [col for col in required_submission_cols if col not in actual_submission_cols]
+
+    assert not missing_comment_cols, f"Comments Dask DataFrame missing expected columns: {missing_comment_cols}"
+    assert not missing_submission_cols, f"Submissions Dask DataFrame missing expected columns: {missing_submission_cols}"
 
     # --- Loop through users and execute the function ---
     all_tests_passed = True

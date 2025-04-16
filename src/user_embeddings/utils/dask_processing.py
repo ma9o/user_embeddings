@@ -247,7 +247,10 @@ def process_submission_group(
         'subreddit': first_row.get('subreddit_y', first_row.get('subreddit', 'N/A')), # Prefer _y suffix
         'title': first_row.get('title_y', first_row.get('title', 'N/A')), # Prefer _y suffix
         'selftext': first_row.get('selftext_y', first_row.get('selftext', '')), # Prefer _y suffix
-        'is_self': first_row.get('is_self_y', first_row.get('is_self', False)) # Prefer _y suffix
+        'is_self': first_row.get('is_self_y', first_row.get('is_self', False)), # Prefer _y suffix
+        # Correctly extract author and created_utc using _y suffix from submission
+        'author': first_row.get('author_y', first_row.get('author', '[unknown_author_fallback]')), 
+        'created_utc': first_row.get('created_utc_y', first_row.get('created_utc', None))
     })
     
     # Check if submission data seems valid (at least title is not N/A)
