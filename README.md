@@ -13,7 +13,7 @@ The process involves two main stages:
 1.  **Teacher-Guided Data Synthesis:** Generating a structured training dataset from raw user histories using an LLM teacher.
 2.  **Student Model Training:** Training the final user/item embedding model (the 'student') on the synthesized dataset.
 
-### 1. Teacher-Guided Data Synthesis Pipeline
+### Step 1: Teacher-Guided Data Synthesis 
 
 This stage transforms raw user activity histories (`H`) into structured textual training triplets `(Context_History_Representation, Positive_Summary, Negative_Summary)`. It leverages a Large Language Model (LLM) as an intelligent "teacher". The pipeline consists of two main phases: Positive Summary Extraction and Negative Summary Selection.
 
@@ -49,9 +49,9 @@ This phase generates a corresponding negative summary (`I_neg_summary`) for each
 5.  **Final Triplet Formation:** Create the final textual training triplet: `(H_context_representation, I_pos_summary, I_neg_summary)`. *[Note: `H_context_representation` might be the text, a summary, or omitted depending on student model needs.]*
 6.  **Output:** A large dataset of these final textual triplets ready for training the student embedding model.
 
-**(Alternative for Phase 2):** As discussed previously, an alternative is to prompt the LLM in step 3 to *generate* synthetic hard negatives directly based on `H_context` and `I_pos`, instead of reranking sampled ones. This avoids the need for the global pool but increases reliance on the LLM's generative capabilities and risks synthetic bias. The reranking approach is generally preferred for grounding in real data while still using LLM judgment for hardness.
+**(Alternative for Phase 2):** An alternative is to prompt the LLM in step 3 to *generate* synthetic hard negatives directly based on `H_context` and `I_pos`, instead of reranking sampled ones. This avoids the need for the global pool but increases reliance on the LLM's generative capabilities and risks synthetic bias. The reranking approach is generally preferred for grounding in real data while still using LLM judgment for hardness.
 
-### Benchmarking Against Standard Q&A Embedders (Crucial Validation)
+### Step 2: Benchmarking Against Standard Q&A Embedders
 
 Before proceeding extensively with training the student model, it is **essential** to validate that this data synthesis process provides a meaningful learning challenge beyond simple semantic retrieval.
 
@@ -60,18 +60,22 @@ Before proceeding extensively with training the student model, it is **essential
 **Procedure:**
 
 1.  **Select Validation Set:** Take a representative subset of the generated `(H_context, I_pos_summary, I_neg_summary)` triplets.
-2.  **Choose Baseline Embedder:** Select a strong, publicly available text embedding model fine-tuned for semantic similarity or retrieval (e.g., models from MTEB leaderboard like E5, Instructor, Sentence-T5, or even Gecko itself if available).
+2.  **Choose Baseline Embedder:** Select a strong, publicly available text embedding model fine-tuned for semantic similarity or retrieval (e.g., `text-embedding-large-exp-03-07`).
 3.  **Encode:** Use the baseline embedder to generate embeddings for:
     *   The `H_context` representation (treating it as a query/context document).
     *   The `I_pos_summary` (treating it as the target document).
     *   The `I_neg_summary` (treating it as a distractor document).
     *   (Optional: Include more distractors sampled from the global `I_pos` pool).
-4.  **Calculate Similarity:** For each triplet, compute the similarity score (e.g., cosine similarity) between the `H_context` embedding and the embeddings of `I_pos_summary`, `I_neg_summary`, and any other distractors.
+4.  **Calculate Similarity:** For each triplet, compute the similarity score between the `H_context` embedding and the embeddings of `I_pos_summary`, `I_neg_summary`, and any other distractors.
 5.  **Evaluate Retrieval:** Measure standard retrieval metrics (e.g., Recall@1, Mean Reciprocal Rank - MRR). Does the `I_pos_summary` consistently achieve the highest similarity score compared to `I_neg_summary` and other distractors?
 6.  **Analysis:**
-    *   **If Baseline Performs Poorly:** This is **good news**. It indicates that the relationship captured by your synthesis process (linking context to specific summarized actions/interests) requires more nuanced understanding than simple semantic matching provided by standard embedders. Your approach is adding value.
-    *   **If Baseline Performs Very Well:** This is a **red flag**. It suggests that the `I_pos_summary` might be too easily identifiable from the `H_context` based on simple keyword overlap or semantic closeness. The task might be too easy, or the negative selection might not be effective enough. Your complex teacher synthesis might not be creating a sufficiently challenging learning signal beyond what standard semantic embedders already capture. In this case, reconsider the teacher's summarization strategy (is it too literal?) or the negative selection method (need harder negatives?).
+    *   **If Baseline Performs Poorly:** This is **good news**. It indicates that the relationship captured by our synthesis process (linking context to specific summarized actions/interests) requires more nuanced understanding than simple semantic matching provided by standard embedders. The approach is adding value.
+    *   **If Baseline Performs Very Well:** This is a **red flag**. It suggests that the `I_pos_summary` might be too easily identifiable from the `H_context` based on simple keyword overlap or semantic closeness. The task might be too easy, or the negative selection might not be effective enough. The complex teacher synthesis might not be creating a sufficiently challenging learning signal beyond what standard semantic embedders already capture. In this case, reconsider the teacher's summarization strategy (is it too literal?) or the negative selection method (need harder negatives?).
 
 This benchmarking step is critical to ensure the effort invested in the teacher-guided synthesis translates into a genuinely advanced representation capability in the student model.
+
+### Step 3: Full training run
+
+TODO
 
 ---
