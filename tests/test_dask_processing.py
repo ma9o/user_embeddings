@@ -11,6 +11,7 @@ import pyarrow as pa # Import pyarrow
 # import pyarrow.parquet as pq # Import pyarrow.parquet
 import time # Add time import
 from dask.distributed import Client, LocalCluster, progress
+from typing import List # Add List import
 
 # Configure logging -> No longer needed
 # logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,15 +20,16 @@ from dask.distributed import Client, LocalCluster, progress
 # This might be handled by pytest configuration or environment variables in a real setup
 import sys
 workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, workspace_root)
+if workspace_root not in sys.path: # Ensure root is in path for src import
+    sys.path.insert(0, workspace_root)
 
 from user_embeddings.utils.dask_processing import generate_user_context
 # No longer need zst_io imports here if helper handles reading/chunking
 # from utils.zst_io import read_single_zst_ndjson_chunked
 # from utils.zst_io import DEFAULT_CHUNK_SIZE
 
-# Import the helper function
-from .test_helpers import _load_or_create_cached_ddf
+# Import the helper function from its new location
+from .helpers.data_loading import load_or_create_cached_ddf
 
 # --- Constants ---
 # Adjust these paths if your data structure is different
@@ -71,7 +73,7 @@ def comments_ddf():
     pa_schema_comments = pa.Schema.from_pandas(meta_comments)
 
     # Call the helper function from the other file
-    return _load_or_create_cached_ddf(
+    return load_or_create_cached_ddf(
         data_path=COMMENTS_PATH,
         file_pattern="RC_*.zst",
         cache_dir=CACHE_DIR,
@@ -99,7 +101,7 @@ def submissions_ddf():
     pa_schema_submissions = pa.Schema.from_pandas(meta_submissions)
 
     # Call the helper function from the other file
-    return _load_or_create_cached_ddf(
+    return load_or_create_cached_ddf(
         data_path=SUBMISSIONS_PATH,
         file_pattern="RS_*.zst",
         cache_dir=CACHE_DIR,
@@ -107,6 +109,120 @@ def submissions_ddf():
         pa_schema=pa_schema_submissions,
         data_type_name="submissions"
     )
+
+def _sample_test_users(comments_ddf: dd.DataFrame, num_users_to_find: int) -> List[str]:
+    """Samples the comments DataFrame to find a list of valid user authors."""
+    print(f"Sampling comments to find {num_users_to_find} valid users...")
+    sampled_users = []
+    # Increase sample size significantly to find multiple users
+    sample_size = 1000 # How many comments to check
+    print(f"Attempting to sample from the head (sample size: {sample_size})...")
+    try:
+        # Sample directly from the Dask DataFrame head
+        # Compute is needed here to get actual author names
+        comments_sample = comments_ddf.head(sample_size, compute=True)
+
+        if not comments_sample.empty:
+            sampled_authors = comments_sample['author'].dropna().unique()
+            found_users = 0
+            for author in sampled_authors:
+                # Filter out deleted users, bots, etc.
+                if author and author != '[deleted]' and not author.endswith('Bot') and not author.endswith('bot'):
+                    sampled_users.append(author)
+                    found_users += 1
+                    if found_users >= num_users_to_find:
+                        break # Stop once we have enough users
+
+            print(f"Found {len(sampled_users)} valid users from sample: {sampled_users}")
+            if len(sampled_users) < num_users_to_find:
+                 print(f"WARNING: Found only {len(sampled_users)}/{num_users_to_find} distinct valid users in the sample of size {sample_size}.")
+
+        if not sampled_users:
+             print(f"ERROR: Could not find any suitable users in the sample (size {sample_size}).")
+             # Let the caller decide whether to skip or fail
+
+    except KeyError as e:
+         print(f"ERROR: Failed to find column '{e}' in comments sample.")
+         raise # Re-raise the error to be caught by the test
+    except Exception as e:
+        print(f"ERROR: Failed to sample users from comments: {e}")
+        import traceback
+        traceback.print_exc()
+        raise # Re-raise the error
+        
+    return sampled_users
+
+def _run_and_validate_user_test(
+    user_id: str, 
+    comments_ddf: dd.DataFrame, 
+    submissions_ddf: dd.DataFrame, 
+    output_dir: str
+) -> bool:
+    """Runs the context generation for a single user, validates, and saves artifact.
+    Returns True if successful, False otherwise.
+    """
+    print(f"\n--- Processing User: {user_id} --- --- --- --- --- --- --- --- --- --- --- --- ---")
+    success = True
+    try:
+        # --- Execute the function under test ---
+        context_ddf = generate_user_context(
+            user_id=user_id,
+            ddf_comments=comments_ddf,
+            ddf_submissions=submissions_ddf
+        )
+
+        # --- Compute the results ---
+        print(f"Computing the result Dask DataFrame for user {user_id}...")
+        start_time = time.time() # Start timing
+        # Persist before compute can sometimes help with complex graphs
+        future = context_ddf.persist()
+        progress(future) # Display progress bar
+        result_pdf = future.compute()
+        end_time = time.time() # End timing
+        print(f"Computation finished for user {user_id}. Result shape: {result_pdf.shape}. Time: {end_time - start_time:.2f}s")
+
+        # --- Assertions on the result ---
+        assert isinstance(result_pdf, pd.DataFrame), f"Result for user {user_id} should be a Pandas DataFrame after compute()"
+
+        # Check if expected columns exist in the result
+        expected_cols = ['submission_id', 'formatted_context', 'user_comment_ids']
+        missing_result_cols = [col for col in expected_cols if col not in result_pdf.columns]
+        if missing_result_cols:
+            err_msg = f"Result DataFrame for user {user_id} missing expected columns: {missing_result_cols}"
+            print(f"ERROR: {err_msg}")
+            assert False, err_msg # Fail the specific user test
+            
+        print(f"Result DataFrame head for user {user_id}:\n{result_pdf.head()}")
+
+        # --- Save test artifact ---
+        os.makedirs(output_dir, exist_ok=True) # Ensure the directory exists
+        # Sanitize username for filename
+        safe_username = "".join(c if c.isalnum() else "_" for c in user_id)
+        output_filename = f"test_output_{safe_username}.csv" 
+        output_path = os.path.join(output_dir, output_filename)
+        try:
+            print(f"Saving test result artifact for {user_id} to: {output_path}")
+            result_pdf.to_csv(output_path, index=False)
+            print("Artifact saved successfully.")
+        except Exception as e:
+            print(f"WARNING: Failed to save test artifact for {user_id} to {output_path}: {e}")
+            success = False # Mark test as partially failed if save fails
+
+        print(f"--- Test for user {user_id} completed successfully. ---")
+
+    except ValueError as e:
+         print(f"ERROR: generate_user_context raised ValueError for user {user_id}: {e}")
+         success = False 
+    except AssertionError as e: # Catch assertion errors explicitly
+         print(f"ERROR: Assertion failed for user {user_id}: {e}")
+         success = False
+    except Exception as e:
+         print(f"ERROR: generate_user_context raised an unexpected exception for user {user_id}: {e}")
+         import traceback
+         traceback.print_exc()
+         success = False
+         
+    return success
 
 # --- Test Function ---
 def test_generate_context_sample_user(
@@ -121,42 +237,13 @@ def test_generate_context_sample_user(
 
     test_users_to_process = []
     if TEST_USER is None:
-        print(f"TEST_USER is None, sampling comments to find {NUM_TEST_USERS} valid users...")
-        # Increase sample size significantly to find multiple users
-        sample_size = 1000 # How many comments to check
-        print(f"Attempting to sample from the head (sample size: {sample_size})...")
         try:
-            # Sample directly from the Dask DataFrame head
-            # Compute is needed here to get actual author names
-            comments_sample = comments_ddf.head(sample_size, compute=True)
-
-            if not comments_sample.empty:
-                sampled_authors = comments_sample['author'].dropna().unique()
-                found_users = 0
-                for author in sampled_authors:
-                    # Filter out deleted users, bots, etc.
-                    if author and author != '[deleted]' and not author.endswith('Bot') and not author.endswith('bot'):
-                        test_users_to_process.append(author)
-                        found_users += 1
-                        if found_users >= NUM_TEST_USERS:
-                            break # Stop once we have enough users
-
-                print(f"Found {len(test_users_to_process)} valid users from sample: {test_users_to_process}")
-                if len(test_users_to_process) < NUM_TEST_USERS:
-                     print(f"WARNING: Found only {len(test_users_to_process)}/{NUM_TEST_USERS} distinct valid users in the sample of size {sample_size}.")
-
+            test_users_to_process = _sample_test_users(comments_ddf, NUM_TEST_USERS)
             if not test_users_to_process:
-                 print(f"ERROR: Could not find any suitable users in the sample (size {sample_size}). Skipping test.")
-                 pytest.skip(f"Could not find any non-deleted users in the sample of size {sample_size}.")
-
-        except KeyError as e:
-             print(f"ERROR: Failed to find column '{e}' in comments sample.")
-             pytest.fail(f"Failed to find column '{e}' in comments sample.")
+                pytest.skip(f"Could not find any non-deleted users in the sample. Skipping test.")
         except Exception as e:
-            print(f"ERROR: Failed to sample users from comments: {e}")
-            import traceback
-            traceback.print_exc()
-            pytest.fail(f"Failed to sample users from comments: {e}")
+             pytest.fail(f"Failed during user sampling: {e}")
+
     elif isinstance(TEST_USER, list):
          print(f"Using predefined list of test users: {TEST_USER}")
          test_users_to_process = TEST_USER
@@ -183,72 +270,24 @@ def test_generate_context_sample_user(
 
     # --- Loop through users and execute the function ---
     all_tests_passed = True
+    test_output_dir = os.path.join(workspace_root, "data/test_results") # Define once
+
     for user_index, current_test_user in enumerate(test_users_to_process):
-        print(f"\\n--- Processing User {user_index + 1}/{len(test_users_to_process)}: {current_test_user} ---")
-
-        try:
-            # --- Execute the function under test ---
-            context_ddf = generate_user_context(
-                user_id=current_test_user,
-                ddf_comments=comments_ddf,
-                ddf_submissions=submissions_ddf
-            )
-
-            # --- Compute the results ---
-            print(f"Computing the result Dask DataFrame for user {current_test_user}...")
-            start_time = time.time() # Start timing
-            # Persist before compute can sometimes help with complex graphs
-            future = context_ddf.persist()
-            progress(future) # Display progress bar
-            result_pdf = future.compute()
-            end_time = time.time() # End timing
-            print(f"Computation finished for user {current_test_user}. Result shape: {result_pdf.shape}. Time: {end_time - start_time:.2f}s")
-
-            # --- Assertions on the result ---
-            assert isinstance(result_pdf, pd.DataFrame), f"Result for user {current_test_user} should be a Pandas DataFrame after compute()"
-
-            # --- Save test artifact ---
-            output_dir = os.path.join(workspace_root, "data/test_results")
-            os.makedirs(output_dir, exist_ok=True) # Ensure the directory exists
-            # Sanitize username for filename if needed (e.g., replace invalid characters)
-            safe_username = "".join(c if c.isalnum() else "_" for c in current_test_user)
-            output_filename = f"test_output_{safe_username}.csv" # Use sanitized name
-            output_path = os.path.join(output_dir, output_filename)
-            try:
-                print(f"Saving test result artifact for {current_test_user} to: {output_path}")
-                result_pdf.to_csv(output_path, index=False)
-                print("Artifact saved successfully.")
-            except Exception as e:
-                print(f"WARNING: Failed to save test artifact for {current_test_user} to {output_path}: {e}")
-                all_tests_passed = False # Mark test as partially failed if save fails
-
-            # Check if the DataFrame is empty or not.
-            # It *could* be empty if the selected user has no comments in the data, which might be valid.
-            print(f"Result DataFrame head for user {current_test_user}:\\n{result_pdf.head()}")
-
-            # Check if expected columns exist in the result
-            expected_cols = ['submission_id', 'formatted_context', 'user_comment_ids']
-            missing_result_cols = [col for col in expected_cols if col not in result_pdf.columns]
-            if missing_result_cols:
-                err_msg = f"Result DataFrame for user {current_test_user} missing expected columns: {missing_result_cols}"
-                print(f"ERROR: {err_msg}")
-                assert False, err_msg # Fail the specific user test
-
-            print(f"--- Test for user {current_test_user} completed successfully. ---")
-
-        except ValueError as e:
-             print(f"ERROR: generate_user_context raised ValueError for user {current_test_user}: {e}")
-             all_tests_passed = False # Mark test as failed for this user
-             continue # Continue to the next user
-        except Exception as e:
-             print(f"ERROR: generate_user_context raised an unexpected exception for user {current_test_user}: {e}")
-             import traceback
-             traceback.print_exc()
-             all_tests_passed = False # Mark test as failed for this user
-             continue # Continue to the next user
+        # Call the helper function for the single user test
+        user_test_passed = _run_and_validate_user_test(
+            user_id=current_test_user,
+            comments_ddf=comments_ddf,
+            submissions_ddf=submissions_ddf,
+            output_dir=test_output_dir
+        )
+        if not user_test_passed:
+            all_tests_passed = False
+            # Decide whether to continue testing other users or stop
+            # For now, let's continue to see all failures
+            # To stop on first failure: break
 
     # --- Dask Cluster Teardown (after all users) ---
-    print("\\nShutting down Dask client and cluster...")
+    print("\nShutting down Dask client and cluster...")
     client.close()
     cluster.close()
     print("Dask client and cluster shut down.")
