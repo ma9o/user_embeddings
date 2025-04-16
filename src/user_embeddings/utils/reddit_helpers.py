@@ -1,5 +1,6 @@
 import pandas as pd
 from typing import List, Dict, Any, Set, Tuple
+from datetime import datetime
 
 # --- Ancestor Finding ---
 
@@ -150,15 +151,16 @@ def _build_tree_structure(
     comment_data_map: Dict[str, pd.Series],
     root_comment_ids: List[str],
     parent_to_child_ids: Dict[str, List[str]],
-    sorted_relevant_ids: List[str]
+    sorted_relevant_ids: List[str],
+    target_username: str # Added for masking
 ) -> List[Dict[str, Any]]:
     """
-    Builds the nested comment thread structure iteratively using pre-initialized data.
+    Builds the generic nested thread structure (user, time, content, replies) iteratively.
     """
     if not comment_data_map: # If initialization returned empty map
         return []
-        
-    # Ensure 'created_utc' exists in comment_data_map for sorting children
+
+    # Check if 'created_utc' exists for timestamp formatting and sorting
     has_created_utc = False
     if sorted_relevant_ids:
         first_id = sorted_relevant_ids[0]
@@ -169,13 +171,26 @@ def _build_tree_structure(
     comments_processed = {}
     for cid in sorted_relevant_ids:
         comment = comment_data_map[cid]
+        author = comment.get("author", "[unknown]")
+        user = "SUBJECT" if author == target_username else author
+
+        timestamp_str = "[unknown_time]"
+        if has_created_utc and pd.notna(comment['created_utc']):
+            try:
+                # Convert Unix timestamp to datetime object
+                dt_object = datetime.utcfromtimestamp(comment['created_utc'])
+                # Format datetime object
+                timestamp_str = dt_object.strftime("%d-%m-%Y %H:%M")
+            except (ValueError, TypeError):
+                timestamp_str = "[invalid_time]" # Handle potential conversion errors
+
         comments_processed[cid] = {
-            # "id": cid, # Optional debug info
-            "author": comment.get("author", "[unknown]"),
-            "body": comment.get("body", "[unavailable]"),
+            "user": user,
+            "time": timestamp_str,
+            "content": comment.get("body", "[unavailable]"),
             "replies": []
         }
-        
+
     final_nested_structure = []
     processed_for_tree = set()
     queue = [] # Use a queue for BFS-like processing
@@ -232,7 +247,11 @@ def _build_tree_structure(
     return final_nested_structure
 
 
-def build_nested_thread(relevant_comment_ids: Set[str], comment_map: pd.DataFrame) -> List[Dict[str, Any]]:
+def build_nested_thread(
+    relevant_comment_ids: Set[str],
+    comment_map: pd.DataFrame,
+    target_username: str # Added for masking
+) -> List[Dict[str, Any]]:
     """
     Builds the nested comment thread structure containing only relevant comments,
     ordered chronologically where possible and structured hierarchically.
@@ -240,7 +259,7 @@ def build_nested_thread(relevant_comment_ids: Set[str], comment_map: pd.DataFram
     """
     if not relevant_comment_ids:
         return []
-        
+
     # 1. Initialize data structures
     comment_data_map, root_ids, parent_to_child_map, sorted_ids = _initialize_thread_build(
         relevant_comment_ids, comment_map
@@ -248,29 +267,68 @@ def build_nested_thread(relevant_comment_ids: Set[str], comment_map: pd.DataFram
 
     # Handle case where created_utc might be missing
     if 'created_utc' not in comment_map.columns:
-        print(f"Warning: 'created_utc' column missing in comment data. Thread structure might have arbitrary order.")
-        # Add a dummy column if missing to avoid errors downstream, though order is lost
-        # This modification should ideally happen before calling _initialize_thread_build,
-        # but we handle it here for robustness.
-        # Create a temporary map to modify if needed.
-        if comment_data_map: # Only if map is not empty
-            temp_map = {}
-            needs_dummy = False
-            for cid, data in comment_data_map.items():
-                 if 'created_utc' not in data:
-                      needs_dummy = True
-                      data = data.copy() # Avoid modifying original map if possible
-                      data['created_utc'] = 0 
-                 temp_map[cid] = data
-            if needs_dummy:
-                 comment_data_map = temp_map
-                 # Re-initialize based on potentially modified map (only if UTC was missing)
-                 # No, initialization already happened. The building step below handles lack of UTC.
+         # If missing, we might need a fallback for sorting or time formatting
+         # For now, _build_tree_structure handles missing timestamps gracefully
+         pass
 
-
-    # 2. Build the tree structure
-    nested_structure = _build_tree_structure(
-        comment_data_map, root_ids, parent_to_child_map, sorted_ids
+    # 2. Build the tree
+    nested_thread = _build_tree_structure(
+        comment_data_map, root_ids, parent_to_child_map, sorted_ids, target_username # Pass target_username
     )
 
-    return nested_structure 
+    return nested_thread
+
+
+def format_submission_context(
+    submission_data: pd.Series,
+    nested_thread: List[Dict[str, Any]],
+    target_username: str # Added for masking
+) -> List[Dict[str, Any]]:
+    """
+    Formats the initial submission post and prepends it to the nested comment thread.
+    Returns the complete thread structure starting with the submission.
+    """
+    author = submission_data.get("author", "[unknown]")
+    user = "SUBJECT" if author == target_username else author
+
+    timestamp_str = "[unknown_time]"
+    if pd.notna(submission_data.get('created_utc')):
+         try:
+              dt_object = datetime.utcfromtimestamp(submission_data['created_utc'])
+              timestamp_str = dt_object.strftime("%d-%m-%Y %H:%M")
+         except (ValueError, TypeError):
+              timestamp_str = "[invalid_time]"
+
+    submission_node = {
+        "user": user,
+        "time": timestamp_str,
+        "content": f"""Title: {submission_data.get("title", "[no title]")}
+Subreddit: {submission_data.get("subreddit", "[no subreddit]")}
+Body: {submission_data.get("selftext", "[no body]")}""",
+        "replies": nested_thread # The built comment thread becomes replies to the submission
+    }
+    # The final structure is a list containing the submission node
+    return [submission_node]
+
+
+# Example Usage Placeholder (Illustrative)
+# This part would typically be in the main processing script (e.g., dask_processing.py)
+#
+# submission_data = ... # pd.Series for the submission
+# comment_map = ... # pd.DataFrame of all comments in the submission
+# user_comment_ids = ... # Set of comment IDs by the target user
+# target_username = ... # The username to mask
+#
+# # 1. Find all relevant comments (user's comments + their ancestors)
+# ancestor_ids = _get_all_ancestors_optimized(user_comment_ids, comment_map)
+# relevant_ids = user_comment_ids.union(ancestor_ids)
+#
+# # 2. Build the nested comment thread
+# nested_comments = build_nested_thread(relevant_ids, comment_map, target_username)
+#
+# # 3. Format with submission context
+# full_thread_structure = format_submission_context(submission_data, nested_comments, target_username)
+#
+# # 4. Convert to JSON (likely done elsewhere)
+# # import json
+# # json_output = json.dumps(full_thread_structure, indent=2) 

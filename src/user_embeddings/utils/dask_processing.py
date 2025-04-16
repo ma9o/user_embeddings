@@ -1,10 +1,11 @@
 import dask.dataframe as dd
 import pandas as pd
 import yaml
+import json
 from typing import List, Dict, Any, Optional, Set, Tuple
 
 # Import helpers from the new modules
-from .reddit_helpers import _get_all_ancestors_optimized, build_nested_thread
+from .reddit_helpers import _get_all_ancestors_optimized, build_nested_thread, format_submission_context
 from .dask_helpers import (
     _validate_input_dataframes, 
     _find_relevant_link_ids, 
@@ -197,49 +198,6 @@ def _build_nested_thread(relevant_comment_ids: Set[str], comment_map: pd.DataFra
     return nested_structure
 
 
-def _format_context(submission: pd.Series, nested_thread: List[Dict[str, Any]]) -> str:
-    """Formats the submission and nested comment thread into a YAML string."""
-
-    # Retrieve values and replace pd.NA with empty string
-    subreddit = submission.get("subreddit")
-    subreddit = '' if pd.isna(subreddit) else subreddit
-
-    title = submission.get("title")
-    title = '' if pd.isna(title) else title
-
-    selftext = submission.get("selftext")
-    selftext = '' if pd.isna(selftext) else selftext
-    
-    is_self = submission.get("is_self", False) # Default to False if missing
-    submission_body = selftext if is_self else "[Link Post]"
-    # Handle case where selftext might be empty string even if is_self is True
-    if is_self and not submission_body:
-        submission_body = "[Empty Self Post]" # Or keep as '' if preferred
-
-    data = {
-        "subreddit": subreddit,
-        "title": title,
-        "submission_body": submission_body, 
-        "replies": nested_thread
-    }
-    
-    try:
-        # Use safe_dump, allow unicode, don't use aliases/anchors, standard indent
-        return yaml.safe_dump(
-            data, 
-            allow_unicode=True, 
-            default_flow_style=False, 
-            indent=2, # Use 2 spaces for YAML indent
-            sort_keys=False # Preserve insertion order where possible
-        )
-    except yaml.YAMLError as e:
-        # Fallback or logging if YAML formatting fails
-        print(f"Warning: YAML formatting failed for submission {submission.get('id', 'UNKNOWN')}: {e}")
-        # Return a basic string representation as fallback
-        # Include subreddit in fallback as well
-        return f"Subreddit: {data['subreddit']}\nTitle: {data['title']}\nSubmission Body: {data['submission_body']}\nReplies: {str(data['replies'])}"
-
-
 def process_submission_group(
     group: pd.DataFrame, 
     target_user: str, 
@@ -337,16 +295,20 @@ def process_submission_group(
          print(f"Error: Cannot build thread for {submission_id_short}. Missing essential columns after potential rename: {missing_base_cols}")
          return None
          
-    nested_thread = build_nested_thread(relevant_comment_ids, comment_map_for_build)
+    # Build the nested comment thread (excluding submission)
+    nested_thread = build_nested_thread(relevant_comment_ids, comment_map_for_build, target_user)
 
-    # Format the context string
-    formatted_context = _format_context(submission_data, nested_thread)
+    # Combine submission data and nested comments into the final structure
+    full_thread_structure = format_submission_context(submission_data, nested_thread, target_user)
+
+    # Convert the final structure to a JSON string
+    json_context = json.dumps(full_thread_structure, indent=2)
 
     # Create the resulting DataFrame row
     result_df = pd.DataFrame({
         'submission_id': [submission_id_short],
-        'formatted_context': [formatted_context],
-        'user_comment_ids': [user_comment_ids_in_submission] 
+        'formatted_context': [json_context],
+        'user_comment_ids': [user_comment_ids_in_submission]
     })
     return result_df
 
@@ -370,10 +332,11 @@ def generate_user_context(
     Returns:
         A Dask DataFrame with columns:
         - submission_id: The ID of the submission (without 't3_' prefix).
-        - formatted_context: A string (YAML format) representing the submission title, 
-                             body, and the comment thread leading to the user's comments.
+        - formatted_context: A JSON string representing the submission post 
+                             (title, subreddit, body) and the comment thread including 
+                             the user's comments and their ancestors.
         - user_comment_ids: A list of comment IDs made by the target user in that submission.
-                             
+
     Raises:
         ValueError: If required columns are missing in the input DataFrames.
     """
