@@ -1,4 +1,4 @@
-# Project Core Assumptions & Approach: Universal User Embeddings from Contextual Interactions
+# Core Assumptions and Approach Details
 
 ## 1. Goal: Universal & Adaptable User Embeddings
 

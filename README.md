@@ -1,10 +1,14 @@
-# Project Title: Learning Universal User Embeddings via Teacher-Guided Synthesis
+# Learning Universal User Embeddings via Teacher-Guided Synthesis
 
 ## Overview
 
 This project explores a novel approach to learning comprehensive user embeddings applicable across various downstream tasks, including item recommendation and user similarity analysis. Traditional methods often specialize (e.g., Collaborative Filtering for recommendation) or struggle with the scale and noise of raw user activity logs (e.g., directly modeling long sequences).
 
-Our approach draws inspiration from knowledge distillation techniques (like Gecko) and self-supervised learning (like SoMeR), but introduces a unique data synthesis step guided by a powerful Large Language Model (LLM) acting as a 'teacher'. The core idea is to train a 'student' embedding model not on raw activity logs, but on semantically meaningful, context-aware examples synthesized by the teacher LLM. (see `docs` directory)
+Our approach draws inspiration from knowledge distillation techniques (like Gecko) and self-supervised learning (like SoMeR), but introduces a unique data synthesis step guided by a powerful Large Language Model (LLM) acting as a 'teacher'. The core idea is to train a 'student' embedding model not on raw activity logs, but on semantically meaningful, context-aware examples synthesized by the teacher LLM. 
+
+## Core Assumptions
+
+See [assumptions.md](docs/assumptions.md)
 
 ## Approach
 
