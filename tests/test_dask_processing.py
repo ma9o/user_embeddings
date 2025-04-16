@@ -92,6 +92,8 @@ def submissions_ddf():
     # Define meta for schema consistency
     meta_submissions = pd.DataFrame({ # Keep meta definition
         'id': pd.Series(dtype=pd.StringDtype()),
+        'author': pd.Series(dtype=pd.StringDtype()),
+        'created_utc': pd.Series(dtype='int64'),
         'subreddit': pd.Series(dtype=pd.StringDtype()),
         'title': pd.Series(dtype=pd.StringDtype()),
         'selftext': pd.Series(dtype=pd.StringDtype()),
