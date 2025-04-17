@@ -28,6 +28,7 @@ MODELS_TO_TEST = [
     "google/gemma-3-27b-it",
     "deepseek/deepseek-r1-distill-llama-70b",
     "meta-llama/llama-4-maverick",
+    "google/gemini-2.5-pro-preview-03-25",
 ]
 JUDGE_MODEL = "google/gemini-2.5-pro-preview-03-25"
 NUM_SAMPLES = 10

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import random
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,34 +29,51 @@ async def run_model(model_name: str, prompt: str) -> str:
 
 def create_judge_prompt(
     instruction_prompt: str, input_data: str, outputs: Dict[str, str]
-) -> str:
-    """Creates the prompt for the judge LLM."""
-    prompt = "You are an expert evaluator tasked with ranking the quality of different Large Language Model (LLM) outputs based on a given instruction and input.\\\\n\\\\n"
-    prompt += f"INSTRUCTION PROMPT GIVEN TO MODELS:\\\\n---\\\\n{instruction_prompt}\\\\n---\\\\n\\\\n"
-    prompt += f"INPUT DATA GIVEN TO MODELS:\\\\n---\\\\n{input_data}\\\\n---\\\\n\\\\n"
-    prompt += 'LLM OUTPUTS TO EVALUATE:\\\\n---\\"'
-    for i, (model_name, output) in enumerate(outputs.items()):
-        prompt += f"\\\\nOutput {i + 1} (Model: {model_name}):\\\\n{output}\\\\n---"
+) -> Tuple[str, Dict[str, str]]:
+    """Creates the prompt for the judge LLM, shuffling and masking model names."""
+    original_items = list(outputs.items())
+    random.shuffle(original_items)
 
-    prompt += "\\\\n\\\\nTASK:\\\\nEvaluate the outputs based *only* on how well they follow the INSTRUCTION PROMPT for the given INPUT DATA. Consider clarity, structure, adherence to format, and accuracy of the generated summary/actions based *solely* on the provided input context.\\\\n\\\\n"
-    prompt += "RANKING FORMAT:\\\\nProvide your ranking as a JSON object containing two keys: 'ranking' (a list of model names, ordered from best to worst) and 'rationale' (a brief explanation for your ranking decisions). For example:\\\\n"
+    masked_outputs = {}
+    mask_to_original_map = {}
+    original_to_mask_map = {}
+    masked_model_names = []
+
+    for i, (original_name, output) in enumerate(original_items):
+        masked_name = f"Model {chr(ord('A') + i)}"
+        masked_outputs[masked_name] = output
+        mask_to_original_map[masked_name] = original_name
+        original_to_mask_map[original_name] = masked_name
+        masked_model_names.append(masked_name)
+
+    prompt = "You are an expert evaluator tasked with ranking the quality of different Large Language Model (LLM) outputs based on a given instruction and input.\n\n"
+    prompt += f"INSTRUCTION PROMPT GIVEN TO MODELS:\n---\n{instruction_prompt}\n---\n\n"
+    prompt += f"INPUT DATA GIVEN TO MODELS:\n---\n{input_data}\n---\n\n"
+    prompt += 'LLM OUTPUTS TO EVALUATE (Models have been anonymized):\n---"'
+    for masked_name, output in masked_outputs.items():
+        prompt += f"\nOutput ({masked_name}):\n{output}\n---"
+
+    prompt += "\n\nTASK:\n1. Evaluate the outputs based *only* on how well they follow the INSTRUCTION PROMPT for the given INPUT DATA. Consider clarity, structure, adherence to format, and accuracy of the generated summary/actions based *solely* on the provided input context.\n"
+    prompt += "2. Determine if *at least one* of the provided outputs correctly and completely fulfilled the INSTRUCTION PROMPT.\n\n"
+    prompt += "RANKING AND CORRECTNESS FORMAT:\nProvide your evaluation as a JSON object containing three keys: 'ranking' (a list of anonymized model names, ordered from best to worst), 'rationale' (a brief explanation for your ranking decisions), and 'any_correct' (a boolean value - `true` if at least one model was correct, `false` otherwise). Use the anonymized model names provided (e.g., Model A, Model B). For example:\n"
     prompt += (
-        "```json\\\\n"
-        "{\\\\n"
-        '  "ranking": ["model_name_best", "model_name_middle", "model_name_worst"],\\\\n'
-        '  "rationale": "Model A was best because... Model B struggled with... Model C failed to..."\\\\n'
-        "}\\\\n"
-        "```\\\\n"
+        "```json\n"
+        "{\n"
+        '  "ranking": ["Model A", "Model C", "Model B"],\n'
+        '  "rationale": "Model A was best because..., Model C was okay..., Model B failed...",\n'
+        '  "any_correct": true\n'
+        "}\n"
+        "```\n"
     )
-    prompt += f"The available model names are: {list(outputs.keys())}. Return ONLY the JSON object and nothing else."
+    prompt += f"The available anonymized model names are: {masked_model_names}. Return ONLY the JSON object and nothing else."
 
-    return prompt
+    return prompt, mask_to_original_map
 
 
 def parse_judge_output(
     judge_response: str,
-) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Parses the JSON ranking and rationale from the judge\'s response."""
+) -> Tuple[Optional[List[str]], Optional[str], Optional[bool]]:
+    """Parses the JSON ranking, rationale, and correctness from the judge's response."""
     try:
         # Use regex to find JSON block, handles optional ```json and ``` markers
         match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", judge_response, re.DOTALL)
@@ -69,26 +87,31 @@ def parse_judge_output(
 
         if not isinstance(parsed_json, dict):
             print(f"Error: Judge output is not a JSON object: {parsed_json}")
-            return None, None
+            return None, None, None
 
         ranking = parsed_json.get("ranking")
         rationale = parsed_json.get("rationale")
+        any_correct = parsed_json.get("any_correct")
 
         if not isinstance(ranking, list) or not all(
             isinstance(item, str) for item in ranking
         ):
             print(f"Error: 'ranking' key is not a list of strings: {ranking}")
-            ranking = None  # Set ranking to None if invalid
+            ranking = None
 
         if not isinstance(rationale, str):
             print(f"Error: 'rationale' key is not a string: {rationale}")
-            rationale = None  # Set rationale to None if invalid
+            rationale = None
 
-        return ranking, rationale
+        if not isinstance(any_correct, bool):
+            print(f"Error: 'any_correct' key is not a boolean: {any_correct}")
+            any_correct = None
+
+        return ranking, rationale, any_correct
 
     except (json.JSONDecodeError, IndexError, TypeError) as e:
         print(f"Error parsing judge output: {e}\\\\nRaw output:\\\\n{judge_response}")
-        return None, None
+        return None, None, None
 
 
 def load_and_sample_data(
@@ -183,95 +206,151 @@ async def run_and_parse_test_models(
 
 async def run_judge_evaluation(
     sample_intermediate_results: List[Dict[str, Any]], judge_model: str
-) -> Dict[int, str]:
-    """Runs the judge model for each sample with valid test model outputs."""
+) -> Dict[int, Tuple[str, Dict[str, str]]]:
+    """Runs the judge model for each sample, returning responses and name mappings."""
     judge_tasks = []
-    judge_task_sample_indices = []
+    judge_task_metadata = []
     print("Preparing judge tasks...")
     for i, intermediate_data in enumerate(sample_intermediate_results):
         if (
             "parsed_outputs" in intermediate_data
             and intermediate_data["parsed_outputs"]
+            and len(intermediate_data["parsed_outputs"]) > 1
         ):
-            judge_prompt = create_judge_prompt(
+            judge_prompt, mask_map = create_judge_prompt(
                 intermediate_data["instruction_prompt"],
                 intermediate_data["input_context"],
                 intermediate_data["parsed_outputs"],
             )
             task = asyncio.create_task(run_model(judge_model, judge_prompt))
             judge_tasks.append(task)
-            judge_task_sample_indices.append(i)
+            judge_task_metadata.append({"sample_index": i, "mask_map": mask_map})
         else:
             print(
-                f"Skipping judge task for sample {i} due to missing/empty parsed outputs."
+                f"Skipping judge task for sample {i} due to missing/empty or single parsed outputs."
             )
 
-    judge_responses = []
+    judge_responses_raw = []
     if judge_tasks:
         print(f"Running {len(judge_tasks)} judge tasks concurrently...")
-        judge_responses = await tqdm_asyncio.gather(
+        judge_responses_raw = await tqdm_asyncio.gather(
             *judge_tasks, desc="Running Judge Models", unit="task"
         )
     else:
         print("No judge tasks to run.")
 
-    return dict(zip(judge_task_sample_indices, judge_responses))
+    judge_response_map: Dict[int, Tuple[str, Dict[str, str]]] = {}
+    for i, raw_response in enumerate(judge_responses_raw):
+        meta = judge_task_metadata[i]
+        sample_index = meta["sample_index"]
+        mask_map = meta["mask_map"]
+        judge_response_map[sample_index] = (raw_response, mask_map)
+
+    return judge_response_map
 
 
 def aggregate_results(
     sample_intermediate_results: List[Dict[str, Any]],
-    judge_response_map: Dict[int, str],
+    judge_response_map: Dict[int, Tuple[str, Dict[str, str]]],
     models_to_test: List[str],
 ) -> List[Dict[str, Any]]:
-    """Aggregates results including inputs, outputs, ranks, and rationale."""
+    """Aggregates results including inputs, outputs, ranks (translated), rationale, and correctness."""
     print("Processing judge results and aggregating final data...")
     results_data = []
 
     for i, intermediate_data in enumerate(sample_intermediate_results):
-        judge_response = judge_response_map.get(i)
-        ranking, rationale = (
-            parse_judge_output(judge_response) if judge_response else (None, None)
-        )
+        judge_data = judge_response_map.get(i)
+        ranking_masked, rationale, any_correct = (None, None, None)
+        mask_to_original_map = None
 
-        if not judge_response:
-            print(f"No judge response found for sample {i}, likely skipped or failed.")
+        if judge_data:
+            judge_response, mask_to_original_map = judge_data
+            ranking_masked, rationale, any_correct = parse_judge_output(judge_response)
+        else:
+            print(
+                f"No judge response data found for sample {i}, likely skipped or failed."
+            )
+
+        ranking_original = None
+        if ranking_masked and mask_to_original_map:
+            try:
+                ranking_original = [
+                    mask_to_original_map[masked]
+                    for masked in ranking_masked
+                    if masked in mask_to_original_map
+                ]
+
+                if len(ranking_original) != len(mask_to_original_map):
+                    print(
+                        f"Warning: Judge ranking for sample {i} ({ranking_masked}) after translation "
+                        f"({ranking_original}) did not contain all expected models from map "
+                        f"({list(mask_to_original_map.values())}). Some ranks might be missing or judge hallucinated names."
+                    )
+                    # If the judge hallucinated names not in the map, ranking_original will be shorter.
+                    # If the judge missed ranking some models, ranking_original will also be shorter.
+                    # We might want to invalidate the ranking here, or proceed carefully.
+                    # For now, we let it proceed, and the check below against expected_models_in_sample handles inconsistencies.
+
+            except KeyError as e:
+                print(
+                    f"Error translating ranking for sample {i}: Masked name {e} not found in map {mask_to_original_map}. Raw masked ranking: {ranking_masked}"
+                )
+                ranking_original = None  # Invalidate if translation fails
 
         input_context = intermediate_data.get("input_context", "ERROR: Input not found")
-        input_length = (
-            len(input_context) if isinstance(input_context, str) else -1
-        )  # Calculate length
+        input_length = len(input_context) if isinstance(input_context, str) else -1
 
         result_row = {
             "input": input_context,
-            "input_length": input_length,  # Add input length here
+            "input_length": input_length,
             "judge_rationale": rationale
             if rationale
-            else "ERROR: Rationale not parsed or judge skipped",
+            else (
+                "ERROR: Rationale not parsed" if judge_data else "Judge Skipped/Failed"
+            ),
+            "judge_any_correct": any_correct if any_correct is not None else "ERROR",
         }
 
         rank_map = {}
-        if ranking:
-            expected_models = set(models_to_test)
-            actual_models = set(ranking)
-            if actual_models == expected_models:
-                rank_map = {model: rank + 1 for rank, model in enumerate(ranking)}
-            else:
+        if ranking_original:
+            expected_models_in_sample = set(
+                intermediate_data.get("parsed_outputs", {}).keys()
+            )
+            ranked_models_in_sample = set(ranking_original)
+
+            if not ranked_models_in_sample.issubset(expected_models_in_sample):
                 print(
-                    f"Warning: Judge ranking for sample {i} ({ranking}) "
-                    f"does not match/contain all MODELS_TO_TEST ({list(expected_models)}). "
+                    f"Warning: Translated judge ranking for sample {i} ({ranking_original}) "
+                    f"contains models not expected for this sample ({list(expected_models_in_sample)}). "
                     "Assigning default ranks (-1)."
                 )
                 rank_map = {model: -1 for model in models_to_test}
+            elif len(ranked_models_in_sample) != len(expected_models_in_sample):
+                print(
+                    f"Warning: Translated judge ranking for sample {i} ({ranking_original}) "
+                    f"is missing some expected models ({list(expected_models_in_sample - ranked_models_in_sample)}). "
+                    "Assigning partial ranks based on available data, others get -1."
+                )
+                rank_map = {
+                    model: rank + 1 for rank, model in enumerate(ranking_original)
+                }
+                for model in expected_models_in_sample - ranked_models_in_sample:
+                    rank_map[model] = -1
+            else:
+                rank_map = {
+                    model: rank + 1 for rank, model in enumerate(ranking_original)
+                }
+
         else:
             rank_map = {model: -1 for model in models_to_test}
 
         for model in models_to_test:
             result_row[f"raw_output_{model}"] = intermediate_data.get(
                 "raw_outputs", {}
-            ).get(model, "ERROR: Model raw output not found")
+            ).get(model, "N/A")
             result_row[f"parsed_output_{model}"] = intermediate_data.get(
                 "parsed_outputs", {}
-            ).get(model, "ERROR: Model parsed output not found")
+            ).get(model, "N/A")
             result_row[f"rank_{model}"] = rank_map.get(model, -1)
 
         results_data.append(result_row)
@@ -290,8 +369,7 @@ def save_results(results_df: pl.DataFrame, output_file: Path):
 def calculate_and_print_leaderboard(
     results_df: pl.DataFrame, models_to_test: List[str]
 ):
-    """Calculates and prints the final leaderboard based on average ranks,
-    including breakdowns by dynamic input length bins."""
+    """Calculates and prints the final leaderboard based on average ranks, correctness, and input length bins."""
     print("--- Overall Leaderboard (Average Rank) ---")
     total_samples = len(results_df)
 
@@ -330,8 +408,32 @@ def calculate_and_print_leaderboard(
         )
     print("-" * len(header_line))
 
+    # --- Calculate and Print Overall Correctness ---
+    if "judge_any_correct" in results_df.columns:
+        try:
+            # Ensure the column is boolean before filtering
+            correct_df = results_df.filter(pl.col("judge_any_correct") == True)
+            num_correct_samples = len(correct_df)
+            if total_samples > 0:
+                correct_percentage = (num_correct_samples / total_samples) * 100
+                print(
+                    f"\nJudge Assessment: {num_correct_samples}/{total_samples} ({correct_percentage:.1f}%) samples had at least one correct output."
+                )
+            else:
+                print("\nJudge Assessment: No samples to assess correctness.")
+        except (
+            Exception
+        ) as e:  # Catch potential errors if column isn't boolean as expected
+            print(
+                f"\nCould not calculate correctness percentage due to error: {e}. Check 'judge_any_correct' column type."
+            )
+    else:
+        print(
+            "\n'judge_any_correct' column not found in results. Skipping correctness calculation."
+        )
+
     # --- Dynamically Calculate and Print Leaderboards per Input Length Bin ---
-    print("--- Leaderboards by Dynamic Input Length (Terciles) ---")
+    print("\n--- Leaderboards by Dynamic Input Length (Terciles) ---")
 
     if (
         "input_length" not in results_df.columns
@@ -341,7 +443,7 @@ def calculate_and_print_leaderboard(
         print(
             "Could not calculate dynamic bins: 'input_length' column missing, empty, or too few values."
         )
-        return  # Exit if we can't calculate bins
+        return
 
     # Calculate Terciles (33.3rd and 66.7th percentiles)
     # Ensure we drop nulls and handle potential errors
@@ -411,7 +513,7 @@ def calculate_and_print_leaderboard(
 
         bin_leaderboard.sort(key=lambda x: x[1])
 
-        # --- Print Bin Leaderboard ---\
+        # --- Print Bin Leaderboard ---
         bin_header_line = f"--- {bin_name} ({bin_total_samples} Samples) ---"
         print(f"{bin_header_line}")
         print("-" * len(bin_header_line))
