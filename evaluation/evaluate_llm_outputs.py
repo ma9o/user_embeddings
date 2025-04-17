@@ -27,8 +27,9 @@ load_dotenv()
 MODELS_TO_TEST = [
     "google/gemma-3-27b-it",
     "deepseek/deepseek-r1-distill-llama-70b",
-    "meta-llama/llama-4-maverick",
-    "google/gemini-2.5-pro-preview-03-25",
+    "deepseek/deepseek-chat-v3-0324",
+    # "meta-llama/llama-4-maverick",
+    # "google/gemini-2.5-pro-preview-03-25",
 ]
 JUDGE_MODEL = "google/gemini-2.5-pro-preview-03-25"
 NUM_SAMPLES = 10
@@ -115,7 +116,7 @@ def parse_judge_output(
 
 async def main():
     """Main function to orchestrate the LLM evaluation pipeline."""
-    initialize_openrouter_client()
+    c = initialize_openrouter_client()
 
     # 1. Load and Sample Data
     sample_df = load_and_sample_data(INPUT_DATA_DIR, NUM_SAMPLES, SEED)
@@ -145,6 +146,8 @@ async def main():
     calculate_and_print_leaderboard(results_df, MODELS_TO_TEST)
 
     print("Evaluation complete.")
+
+    await c.aclose()
 
 
 if __name__ == "__main__":
