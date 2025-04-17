@@ -1,15 +1,23 @@
-import httpx
-import os
 import json
+import os
 
-openrouter_client = httpx.AsyncClient(
-    base_url="https://openrouter.ai/api/v1",
-    headers={
-        "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
-        "Content-Type": "application/json",
-    },
-    limits=httpx.Limits(max_connections=200, max_keepalive_connections=200),
-)
+import httpx
+
+openrouter_client = None
+
+
+def initialize_openrouter_client():
+    global openrouter_client
+    if openrouter_client is None:
+        openrouter_client = httpx.AsyncClient(
+            base_url="https://openrouter.ai/api/v1",
+            headers={
+                "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
+                "Content-Type": "application/json",
+            },
+            limits=httpx.Limits(max_connections=200, max_keepalive_connections=200),
+        )
+    return openrouter_client
 
 
 async def get_text_completion(model_name: str, data: str) -> str:
