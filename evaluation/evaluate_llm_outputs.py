@@ -143,7 +143,7 @@ async def main():
     # 6. Calculate and Print Leaderboard
     calculate_and_print_leaderboard(results_df, MODELS_TO_TEST)
 
-    print("\\nEvaluation complete.")
+    print("Evaluation complete.")
 
 
 if __name__ == "__main__":

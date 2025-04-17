@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -56,11 +57,13 @@ def parse_judge_output(
 ) -> Tuple[Optional[List[str]], Optional[str]]:
     """Parses the JSON ranking and rationale from the judge\'s response."""
     try:
-        # Extract JSON block if necessary
-        if "```json" in judge_response:
-            json_str = judge_response.split("```json\\\\n")[1].split("\\\\n```")[0]
+        # Use regex to find JSON block, handles optional ```json and ``` markers
+        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", judge_response, re.DOTALL)
+        if match:
+            json_str = match.group(1)
         else:
-            json_str = judge_response
+            # Fallback: assume the whole response might be JSON if no ``` markers
+            json_str = judge_response.strip()
 
         parsed_json = json.loads(json_str)
 
@@ -278,7 +281,7 @@ def aggregate_results(
 
 def save_results(results_df: pl.DataFrame, output_file: Path):
     """Saves the evaluation results DataFrame to a CSV file."""
-    print(f"\\\\nSaving evaluation results to {output_file}...")
+    print(f"Saving evaluation results to {output_file}...")
     # Order the columns alphabetically before saving
     results_df = results_df.select(sorted(results_df.columns))
     results_df.write_csv(output_file)
@@ -289,7 +292,7 @@ def calculate_and_print_leaderboard(
 ):
     """Calculates and prints the final leaderboard based on average ranks,
     including breakdowns by dynamic input length bins."""
-    print("\\n--- Overall Leaderboard (Average Rank) ---")
+    print("--- Overall Leaderboard (Average Rank) ---")
     total_samples = len(results_df)
 
     # --- Calculate Overall Leaderboard ---
@@ -328,7 +331,7 @@ def calculate_and_print_leaderboard(
     print("-" * len(header_line))
 
     # --- Dynamically Calculate and Print Leaderboards per Input Length Bin ---
-    print("\\n--- Leaderboards by Dynamic Input Length (Terciles) ---")
+    print("--- Leaderboards by Dynamic Input Length (Terciles) ---")
 
     if (
         "input_length" not in results_df.columns
@@ -336,22 +339,25 @@ def calculate_and_print_leaderboard(
         or len(results_df.drop_nulls("input_length")) < 3
     ):
         print(
-            "\\nCould not calculate dynamic bins: 'input_length' column missing, empty, or too few values."
+            "Could not calculate dynamic bins: 'input_length' column missing, empty, or too few values."
         )
         return  # Exit if we can't calculate bins
 
     # Calculate Terciles (33.3rd and 66.7th percentiles)
     # Ensure we drop nulls and handle potential errors
     try:
-        quantiles = (
-            results_df["input_length"].drop_nulls().quantile([0.333, 0.667]).to_list()
-        )
-        q1 = int(quantiles[0])  # Lower tercile boundary
-        q2 = int(quantiles[1])  # Upper tercile boundary
+        # Call quantile separately for each percentile
+        q1_val = results_df["input_length"].drop_nulls().quantile(0.333)
+        q2_val = results_df["input_length"].drop_nulls().quantile(0.667)
+        if q1_val is None or q2_val is None:
+            raise ValueError("Quantile calculation returned None")
+
+        q1 = int(q1_val)  # Lower tercile boundary
+        q2 = int(q2_val)  # Upper tercile boundary
         min_len_val = results_df["input_length"].min()
         max_len_val = results_df["input_length"].max()
     except Exception as e:
-        print(f"\\nError calculating quantiles for input length bins: {e}")
+        print(f"Error calculating quantiles for input length bins: {e}")
         return
 
     # Define dynamic bins based on terciles
@@ -364,7 +370,7 @@ def calculate_and_print_leaderboard(
 
     # Handle edge case where quantiles might be equal (low variance in lengths)
     if q1 == q2:
-        print(f"\\nNote: Input length quantiles are equal ({q1}). Adjusting binning.")
+        print(f"Note: Input length quantiles are equal ({q1}). Adjusting binning.")
         bins = {
             f"Short (< {q1})": (pl.col("input_length") < q1),
             f"Equal to {q1}": (pl.col("input_length") == q1),
@@ -381,7 +387,7 @@ def calculate_and_print_leaderboard(
         bin_total_samples = len(bin_df)
 
         if bin_total_samples == 0:
-            print(f"\\n--- {bin_name}: (No samples in this range) ---")
+            print(f"--- {bin_name}: (No samples in this range) ---")
             continue
 
         bin_leaderboard = []
@@ -407,7 +413,7 @@ def calculate_and_print_leaderboard(
 
         # --- Print Bin Leaderboard ---\
         bin_header_line = f"--- {bin_name} ({bin_total_samples} Samples) ---"
-        print(f"\\n{bin_header_line}")
+        print(f"{bin_header_line}")
         print("-" * len(bin_header_line))
         for i, (model, avg_rank, num_valid) in enumerate(bin_leaderboard):
             rank_str = f"{avg_rank:.2f}" if num_valid > 0 else "N/A"
