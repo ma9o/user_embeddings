@@ -22,9 +22,9 @@ MODELS_TO_TEST = [
     "google/gemini-2.5-pro-preview-03-25",
 ]
 JUDGE_MODEL = "google/gemini-2.5-pro-preview-03-25"
-NUM_SAMPLES = 10
-INPUT_DATA_DIR = Path("../data/test_results")
-OUTPUT_FILE = Path("../data/test_results/llm_evaluation_results.csv")
+NUM_SAMPLES = 5
+INPUT_DATA_DIR = Path("./data/test_results")
+OUTPUT_FILE = Path("./data/test_results/llm_evaluation_results.csv")
 
 
 # --- Helper Functions ---
@@ -154,6 +154,43 @@ async def main():
     results_df = pl.DataFrame(results_data)
     print(f"\nSaving evaluation results to {OUTPUT_FILE}...")
     results_df.write_csv(OUTPUT_FILE)
+
+    # --- Calculate and Print Leaderboard ---
+    print("\n--- Final Leaderboard (Average Rank) ---")
+    leaderboard = []
+    total_samples = len(results_df)
+    for model in MODELS_TO_TEST:
+        rank_col = f"{model}_rank"
+        # Ensure the rank column exists before trying to access it
+        if rank_col in results_df.columns:
+            valid_ranks = results_df.filter(pl.col(rank_col) != -1)[rank_col]
+            num_valid = len(valid_ranks)
+            if num_valid > 0:
+                avg_rank = valid_ranks.mean()
+                leaderboard.append((model, avg_rank, num_valid))
+            else:
+                leaderboard.append(
+                    (model, float("inf"), 0)
+                )  # Assign infinity rank if no valid runs
+        else:
+            print(
+                f"Warning: Rank column '{rank_col}' not found in results. Skipping model {model} for leaderboard."
+            )
+            leaderboard.append((model, float("inf"), 0))  # Treat as if no valid runs
+
+    # Sort by average rank (ascending), lower is better
+    leaderboard.sort(key=lambda x: x[1])
+
+    header_line = "--- Final Leaderboard (Average Rank) ---"
+    print("-" * len(header_line))  # Match header length for separator
+
+    for i, (model, avg_rank, num_valid) in enumerate(leaderboard):
+        rank_str = f"{avg_rank:.2f}" if num_valid > 0 else "N/A"
+        print(
+            f"{i + 1}. {model}: Avg Rank = {rank_str} ({num_valid}/{total_samples} valid runs)"
+        )
+
+    print("-" * len(header_line))  # Footer separator
     print("Evaluation complete.")
 
 
