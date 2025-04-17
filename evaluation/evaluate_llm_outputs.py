@@ -181,10 +181,10 @@ async def main():
         rank_map = {}
         if ranking:
             print(f"Judge ranking: {ranking}")
-            if rationale:
-                print(f"Judge rationale: {rationale}")
-            else:
-                print("Judge rationale: Not provided or parsing failed.")
+            # if rationale:
+            #     print(f"Judge rationale: {rationale}")
+            # else:
+            #     print("Judge rationale: Not provided or parsing failed.")
             rank_map = {model: rank + 1 for rank, model in enumerate(ranking)}
         else:
             print("Could not parse judge ranking for sample. Assigning default ranks.")

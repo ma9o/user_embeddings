@@ -31,6 +31,7 @@ Generate a single JSON object with the following structure:
 
 Key Principles for Output Generation:
 
+0.  **No Information Loss:** The output should contain all information from the input, just reworded and restructured to avoid verbatim quoting.
 1.  **Focus on SUBJECT:** The structure revolves around the participant identified as "SUBJECT" in the input `user_context`. Their messages are broken down into atomic action strings.
 2.  **Context Summarization:** Messages from ALL OTHER participants are summarized into concise, natural language `context` strings. A `context` field captures the essence of conversational turns by non-SUBJECT participants that occur *between* the SUBJECT's actions *at a given nesting level*. The style should be similar to the action strings.
 3.  **Structure Follows Flow:** The nesting reflects the conversation's reply structure *only when* non-SUBJECT participant messages (context) interleave with the SUBJECT's messages. If the SUBJECT replies multiple times without intervening context *at that level*, their action strings appear sequentially in the same `actions` list.
