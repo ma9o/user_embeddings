@@ -134,6 +134,7 @@ def load_and_sample_data(
         )
         sample_df = full_df
     else:
+        print(f"Using seed {seed} for sampling.")
         sample_df = full_df.sample(n=num_samples, shuffle=True, seed=seed)
 
     print(f"Selected {len(sample_df)} rows for evaluation.")
@@ -253,8 +254,9 @@ def aggregate_results(
     sample_intermediate_results: List[Dict[str, Any]],
     judge_response_map: Dict[int, Tuple[str, Dict[str, str]]],
     models_to_test: List[str],
+    effective_seed: int,
 ) -> List[Dict[str, Any]]:
-    """Aggregates results including inputs, outputs, ranks (translated), rationale, and correctness."""
+    """Aggregates results including inputs, outputs, ranks (translated), rationale, correctness, and seed."""
     print("Processing judge results and aggregating final data...")
     results_data = []
 
@@ -309,6 +311,7 @@ def aggregate_results(
                 "ERROR: Rationale not parsed" if judge_data else "Judge Skipped/Failed"
             ),
             "judge_any_correct": any_correct if any_correct is not None else "ERROR",
+            "seed": effective_seed,
         }
 
         rank_map = {}

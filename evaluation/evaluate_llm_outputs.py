@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -119,7 +120,14 @@ async def main():
     c = initialize_openrouter_client()
 
     # 1. Load and Sample Data
-    sample_df = load_and_sample_data(INPUT_DATA_DIR, NUM_SAMPLES, SEED)
+    effective_seed = SEED if SEED is not None else int(time.time())
+    print(f"Using seed: {effective_seed}")
+
+    # Construct output filename with seed
+    output_filename = f"llm_evaluation_results_seed_{effective_seed}.csv"
+    output_file_path = INPUT_DATA_DIR / output_filename
+
+    sample_df = load_and_sample_data(INPUT_DATA_DIR, NUM_SAMPLES, effective_seed)
     if sample_df is None:
         return  # Exit if no data
 
@@ -135,12 +143,12 @@ async def main():
 
     # 4. Aggregate Final Results
     results_data = aggregate_results(
-        sample_intermediate_results, judge_response_map, MODELS_TO_TEST
+        sample_intermediate_results, judge_response_map, MODELS_TO_TEST, effective_seed
     )
     results_df = pl.DataFrame(results_data)
 
     # 5. Save Results
-    save_results(results_df, OUTPUT_FILE)
+    save_results(results_df, output_file_path)
 
     # 6. Calculate and Print Leaderboard
     calculate_and_print_leaderboard(results_df, MODELS_TO_TEST)

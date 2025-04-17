@@ -23,7 +23,15 @@ def _validate_input_dataframes(
             f"ddf_comments is missing required columns: {missing_comment_cols}"
         )
 
-    required_submission_cols = ["id", "subreddit", "title", "selftext", "is_self"]
+    required_submission_cols = [
+        "id",
+        "subreddit",
+        "title",
+        "selftext",
+        "is_self",
+        "author",
+        "created_utc",
+    ]
     missing_submission_cols = [
         col for col in required_submission_cols if col not in ddf_submissions.columns
     ]
@@ -99,7 +107,15 @@ def _prepare_and_merge_data(
         "body",
         "created_utc",
     ]
-    required_submission_cols = ["id", "subreddit", "title", "selftext", "is_self"]
+    required_submission_cols = [
+        "id",
+        "subreddit",
+        "title",
+        "selftext",
+        "is_self",
+        "author",
+        "created_utc",
+    ]
 
     # --- Prepare Comments DataFrame ---
     # Check if empty using partitions/divisions if possible, fallback to compute head(1)
