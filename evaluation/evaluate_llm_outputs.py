@@ -10,7 +10,10 @@ from user_embeddings.utils.get_text_completion import (
     get_text_completion,
     initialize_openrouter_client,
 )
-from user_embeddings.utils.teacher_prompt import get_teacher_prompt
+from user_embeddings.utils.teacher_prompt import (
+    get_teacher_prompt,
+    parse_teacher_prompt_output,
+)
 
 load_dotenv()
 
@@ -19,7 +22,6 @@ MODELS_TO_TEST = [
     "google/gemma-3-27b-it",
     "deepseek/deepseek-r1-distill-llama-70b",
     "meta-llama/llama-4-maverick",
-    "google/gemini-2.5-pro-preview-03-25",
 ]
 JUDGE_MODEL = "google/gemini-2.5-pro-preview-03-25"
 NUM_SAMPLES = 5
@@ -50,17 +52,22 @@ def create_judge_prompt(
         prompt += f"\nOutput {i + 1} (Model: {model_name}):\n{output}\n---"
 
     prompt += "\n\nTASK:\nEvaluate the outputs based *only* on how well they follow the INSTRUCTION PROMPT for the given INPUT DATA. Consider clarity, structure, adherence to format, and accuracy of the generated summary/actions based *solely* on the provided input context.\n\n"
-    prompt += "RANKING FORMAT:\nProvide your ranking as a JSON list of model names, ordered from best to worst. For example:\n"
+    prompt += "RANKING FORMAT:\nProvide your ranking as a JSON object containing two keys: 'ranking' (a list of model names, ordered from best to worst) and 'rationale' (a brief explanation for your ranking decisions). For example:\n"
     prompt += (
-        '```json\n["model_name_best", "model_name_middle", "model_name_worst"]\n```\n'
+        "```json\n"
+        "{\n"
+        '  "ranking": ["model_name_best", "model_name_middle", "model_name_worst"],\n'
+        '  "rationale": "Model A was best because... Model B struggled with... Model C failed to..."\n'
+        "}\n"
+        "```\n"
     )
-    prompt += f"The available model names are: {list(outputs.keys())}. Return ONLY the JSON list and nothing else."
+    prompt += f"The available model names are: {list(outputs.keys())}. Return ONLY the JSON object and nothing else."
 
     return prompt
 
 
-def parse_judge_output(judge_response: str) -> list[str] | None:
-    """Parses the JSON ranking list from the judge's response."""
+def parse_judge_output(judge_response: str) -> tuple[list[str] | None, str | None]:
+    """Parses the JSON ranking and rationale from the judge's response."""
     try:
         # Extract JSON block if necessary
         if "```json" in judge_response:
@@ -68,15 +75,30 @@ def parse_judge_output(judge_response: str) -> list[str] | None:
         else:
             json_str = judge_response
 
-        ranking = json.loads(json_str)
-        if isinstance(ranking, list) and all(isinstance(item, str) for item in ranking):
-            return ranking
-        else:
-            print(f"Error: Judge output is not a list of strings: {ranking}")
-            return None
+        parsed_json = json.loads(json_str)
+
+        if not isinstance(parsed_json, dict):
+            print(f"Error: Judge output is not a JSON object: {parsed_json}")
+            return None, None
+
+        ranking = parsed_json.get("ranking")
+        rationale = parsed_json.get("rationale")
+
+        if not isinstance(ranking, list) or not all(
+            isinstance(item, str) for item in ranking
+        ):
+            print(f"Error: 'ranking' key is not a list of strings: {ranking}")
+            ranking = None  # Set ranking to None if invalid
+
+        if not isinstance(rationale, str):
+            print(f"Error: 'rationale' key is not a string: {rationale}")
+            rationale = None  # Set rationale to None if invalid
+
+        return ranking, rationale
+
     except (json.JSONDecodeError, IndexError, TypeError) as e:
         print(f"Error parsing judge output: {e}\nRaw output:\n{judge_response}")
-        return None
+        return None, None
 
 
 async def main():
@@ -115,24 +137,54 @@ async def main():
 
         # Run models in parallel
         tasks = [run_model(model, instruction_prompt) for model in MODELS_TO_TEST]
-        model_outputs = await asyncio.gather(*tasks)
-        outputs_dict = dict(zip(MODELS_TO_TEST, model_outputs))
+        model_outputs_raw = await asyncio.gather(*tasks)
+        raw_outputs_dict = dict(zip(MODELS_TO_TEST, model_outputs_raw))
 
-        # Prepare for judge
+        # Parse the final output from each model
+        parsed_outputs_dict = {}
+        for model, raw_output in raw_outputs_dict.items():
+            if raw_output.startswith("ERROR:"):
+                parsed_outputs_dict[model] = raw_output  # Keep error message
+            else:
+                try:
+                    # Attempt to parse the structured output
+                    # Assuming parse_teacher_prompt_output returns the relevant parsed string/object
+                    # Convert to string for consistency in the judge prompt
+                    parsed_output = parse_teacher_prompt_output(raw_output)
+                    parsed_outputs_dict[model] = str(
+                        parsed_output
+                    )  # Ensure it's a string
+                except Exception as parse_error:
+                    print(f"Error parsing output from {model}: {parse_error}")
+                    # Provide the raw output to the judge if parsing fails, clearly marked
+                    parsed_outputs_dict[model] = (
+                        f"ERROR PARSING OUTPUT: {parse_error}\nRAW OUTPUT:\n{raw_output}"
+                    )
+
+        # Prepare for judge using PARSED outputs
         judge_prompt = create_judge_prompt(
-            instruction_prompt, input_context, outputs_dict
+            instruction_prompt, input_context, parsed_outputs_dict
         )
 
         # Run judge model
         print(f"\nAsking judge ({JUDGE_MODEL}) for ranking...")
         judge_response = await run_model(JUDGE_MODEL, judge_prompt)
-        ranking = parse_judge_output(judge_response)
+        ranking, rationale = parse_judge_output(judge_response)
 
         # Store results
-        result_row = {"input": input_context}
+        result_row = {
+            "input": input_context,
+            "judge_rationale": rationale
+            if rationale
+            else "ERROR: Rationale not parsed",
+        }
         rank_map = {}
         if ranking:
             print(f"Judge ranking: {ranking}")
+            if rationale:
+                print(f"Judge rationale: {rationale}")
+            else:
+                print("Judge rationale: Not provided or parsing failed.")
             rank_map = {model: rank + 1 for rank, model in enumerate(ranking)}
         else:
             print("Could not parse judge ranking for sample. Assigning default ranks.")
@@ -141,8 +193,13 @@ async def main():
             }  # Use -1 to indicate error
 
         for model in MODELS_TO_TEST:
-            result_row[f"{model}_output"] = outputs_dict.get(
-                model, "ERROR: Model not found"
+            # Store the RAW output for reference/debugging
+            result_row[f"{model}_raw_output"] = raw_outputs_dict.get(
+                model, "ERROR: Model raw output not found"
+            )
+            # Store the PARSED output that was judged
+            result_row[f"{model}_parsed_output"] = parsed_outputs_dict.get(
+                model, "ERROR: Model parsed output not found"
             )
             result_row[f"{model}_rank"] = rank_map.get(
                 model, -1
