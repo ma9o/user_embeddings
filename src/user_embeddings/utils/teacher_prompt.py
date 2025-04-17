@@ -1,3 +1,6 @@
+import json
+from json_repair import repair_json
+
 TEACHER_PROMPT = """
 You are an Expert Interaction Analyzer and Structure Synthesizer. Your goal is to analyze a conversational context, focusing on the contributions of the participant designated as 'SUBJECT', and represent the flow of interaction as a nested JSON structure composed of natural language summaries and actions.
 
@@ -102,8 +105,69 @@ Correct JSON Output:
 BEGIN TASK
 
 Input:
-{user_context}
 """
 
-def get_teacher_prompt(target_user_name: str, user_context: str) -> str:
-    return TEACHER_PROMPT.format(target_user_name=target_user_name, user_context=user_context)
+def get_teacher_prompt(user_context_raw: str) -> str:
+    user_context = json.loads(user_context_raw)
+    return f"{TEACHER_PROMPT}\n{user_context}"
+
+def _extract_last_json(text: str) -> dict | None:
+    """
+    Finds and parses the last valid top-level JSON object enclosed in {}
+    within a string, correctly handling nested structures.
+
+    Args:
+        text: The string potentially containing JSON objects and other text.
+
+    Returns:
+        The parsed JSON object as a dictionary, or None if no valid JSON object
+        is found.
+    """
+    end_index = len(text) - 1
+    while True:
+        # Find the last '}' at or before end_index
+        end_index = text.rfind('}', 0, end_index + 1)
+        if end_index == -1:
+            return None # No more '}' found
+
+        # Try to find the matching '{' for this '}' by tracking brace levels
+        start_index = -1
+        brace_level = 0
+        for i in range(end_index, -1, -1):
+            char = text[i]
+            if char == '}':
+                brace_level += 1
+            elif char == '{':
+                brace_level -= 1
+                if brace_level == 0:
+                    start_index = i
+                    break # Found the matching '{'
+
+        if start_index != -1:
+            # Extract the potential JSON substring
+            potential_json_str = text[start_index : end_index + 1]
+            try:
+                # Attempt to parse the substring as JSON
+                # Consider using repair_json if slightly malformed JSON is expected
+                parsed_json = json.loads(potential_json_str)
+                # Ensure it's a dictionary (object), not just an array or primitive
+                if isinstance(parsed_json, dict):
+                   return parsed_json # Return the first valid JSON object found from the end
+            except json.JSONDecodeError:
+                # If parsing fails, this segment wasn't a valid JSON object.
+                # Continue searching from before this '}' in the next iteration.
+                pass
+
+        # Move search backward: look for a '}' before the one we just processed
+        end_index -= 1
+        if end_index < 0:
+             return None # Reached beginning of string without finding valid JSON
+
+def parse_teacher_prompt_output(output: str) -> dict:
+    # Find the last occurrence of a json object in the output delimited by {}, starting from the bottom of the output
+    parsed_data = _extract_last_json(output)
+    if parsed_data is None:
+        # Consider how to handle cases where no JSON is found.
+        # Raise an error, return an empty dict, or handle differently.
+        raise ValueError("No valid JSON object found in the output.")
+    return parsed_data

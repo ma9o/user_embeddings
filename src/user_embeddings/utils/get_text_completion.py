@@ -1,26 +1,44 @@
+import httpx
 import os
-import openai
+import json
 
-def get_openrouter_client() -> openai.OpenAI:
-    return openai.OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.getenv("OPENROUTER_API_KEY"),
-    )
+openrouter_client = httpx.AsyncClient(
+    base_url="https://openrouter.ai/api/v1",
+    headers={
+        "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
+        "Content-Type": "application/json",
+    },
+    limits=httpx.Limits(max_connections=200, max_keepalive_connections=200)
+)
 
-def get_text_completion(openrouter_client: openai.OpenAI, model_name: str, data: str) -> str:
-    completion = openrouter_client.chat.completions.create(
-      model=model_name,
-      messages=[
-        {
-          "role": "user",
-          "content": [
+
+async def get_text_completion(model_name: str, data: str) -> str:
+    payload = {
+        "model": model_name,
+        "messages": [
             {
-              "type": "text",
-              "text": data
-            },
-          ]
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": data},
+                ]
+            }
+        ],
+        'provider': {
+            'sort': 'throughput'
         }
-      ]
+    }
+
+    response = await openrouter_client.post(
+        "/chat/completions",
+        data=json.dumps(payload)
     )
 
-    return completion.choices[0].message.content
+    response.raise_for_status()
+    completion_data = response.json()
+
+    if completion_data.get("choices") and len(completion_data["choices"]) > 0:
+        message = completion_data["choices"][0].get("message")
+        if message and message.get("content"):
+            return message["content"]
+
+    raise ValueError("Could not extract completion content from the response.")
