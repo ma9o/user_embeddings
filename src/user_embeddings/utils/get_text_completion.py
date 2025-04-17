@@ -8,7 +8,7 @@ openrouter_client = httpx.AsyncClient(
         "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
         "Content-Type": "application/json",
     },
-    limits=httpx.Limits(max_connections=200, max_keepalive_connections=200)
+    limits=httpx.Limits(max_connections=200, max_keepalive_connections=200),
 )
 
 
@@ -20,17 +20,14 @@ async def get_text_completion(model_name: str, data: str) -> str:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": data},
-                ]
+                ],
             }
         ],
-        'provider': {
-            'sort': 'throughput'
-        }
+        "provider": {"sort": "throughput"},
     }
 
     response = await openrouter_client.post(
-        "/chat/completions",
-        data=json.dumps(payload)
+        "/chat/completions", data=json.dumps(payload)
     )
 
     response.raise_for_status()
