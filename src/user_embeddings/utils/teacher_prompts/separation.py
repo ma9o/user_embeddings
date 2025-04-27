@@ -1,8 +1,14 @@
-import json
+from typing import Union
 
-from .utils import _extract_last_json
+from pydantic import BaseModel
 
-SEPARATION_PROMPT = """
+
+class SeparationOutput(BaseModel):
+    context: str
+    actions: list[Union[str, "SeparationOutput"]]
+
+
+PROMPT = """
 You are an Expert Interaction Analyzer and Structure Synthesizer. Your goal is to analyze a conversational context, focusing on the contributions of the participant designated as 'SUBJECT', and represent the flow of interaction as a nested JSON structure composed of natural language summaries and actions.
 
 Input:
@@ -108,20 +114,3 @@ BEGIN TASK
 
 Input:
 """
-
-
-def get_separation_prompt(user_context_raw: str) -> str:
-    # Parse to ensure valid JSON, but pass raw string to prompt
-    try:
-        json.loads(user_context_raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in user_context_raw: {e}") from e
-    return f"{SEPARATION_PROMPT}\n{user_context_raw}\n```"
-
-
-def parse_separation_output(output: str) -> dict:
-    parsed_data = _extract_last_json(output)
-    if parsed_data is None:
-        raise ValueError("No valid JSON object found in the separation output.")
-    # TODO: Add validation logic here to ensure the parsed_data conforms to the expected structure
-    return parsed_data

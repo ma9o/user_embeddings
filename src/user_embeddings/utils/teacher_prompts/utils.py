@@ -1,4 +1,24 @@
 import json
+from typing import Any, Type
+
+from pydantic import BaseModel
+
+
+def get_prompt(prompt: str, user_context_raw: str) -> str:
+    try:
+        json.loads(user_context_raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in user_context_raw: {e}") from e
+    return f"{prompt}\n{user_context_raw}\n```"
+
+
+def parse_output(last_json_str: str, pydantic_model: Type[BaseModel]) -> Any:
+    """Parses the LLM output to extract the hierarchical summaries."""
+    parsed_data = _extract_last_json(last_json_str)
+    if parsed_data is None:
+        raise ValueError("No valid JSON object found in the inference output.")
+
+    return pydantic_model.model_validate(parsed_data).model_dump()
 
 
 def _extract_last_json(text: str) -> dict | None:

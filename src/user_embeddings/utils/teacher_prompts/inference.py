@@ -1,9 +1,12 @@
-import json
-from typing import Any, Dict
+from pydantic import BaseModel
 
-from .utils import _extract_last_json
 
-INFERENCE_PROMPT = """
+class InferenceOutput(BaseModel):
+    context: str
+    actions: list[list[str]]
+
+
+PROMPT = """
 You are an Expert Information Extractor and Normalizer. Your goal is to analyze a structured summary of a conversation thread, focusing on the participant designated as 'SUBJECT'. Abstract the SUBJECT's specific actions into *direct statements* representing their knowledge, opinions, explicitly mentioned attributes (possessions, experiences, location), and core intent demonstrated *within that specific interaction*. Avoid introductory phrases like "States that..." or "Displays...". Your output MUST retain the exact overall JSON structure of the input, transforming only the content of the 'actions' list.
 
 Input:
@@ -81,43 +84,5 @@ Correct JSON Output (Direct Statements, Capitalized Categories, Actions as Lists
 
 BEGIN TASK
 
-Input Structured Context:
-
-{separation_output_json}
-
-Output JSON:
+Input:
 """
-
-
-def get_inference_prompt(separation_output: Dict[str, Any]) -> str:
-    """Formats the inference prompt with the structured output from the separation step."""
-    # Convert dict back to JSON string for inclusion in the prompt
-    separation_output_json = json.dumps(separation_output, indent=2)
-    # Basic validation
-    if not isinstance(separation_output, dict) or "actions" not in separation_output:
-        raise ValueError(
-            "Invalid separation_output format provided to get_inference_prompt."
-        )
-    return INFERENCE_PROMPT.format(separation_output_json=separation_output_json)
-
-
-def parse_inference_output(output: str) -> Dict[str, str]:
-    """Parses the LLM output to extract the hierarchical summaries."""
-    parsed_data = _extract_last_json(output)
-    if parsed_data is None:
-        raise ValueError("No valid JSON object found in the inference output.")
-
-    # Validate the structure of the parsed data
-    if (
-        not isinstance(parsed_data, dict)
-        or "medium_summary" not in parsed_data
-        or "broad_summary" not in parsed_data
-        or not isinstance(parsed_data["medium_summary"], str)
-        or not isinstance(parsed_data["broad_summary"], str)
-    ):
-        raise ValueError(
-            "Parsed JSON from inference output does not match expected format: "
-            "{'medium_summary': str, 'broad_summary': str}"
-        )
-
-    return parsed_data
