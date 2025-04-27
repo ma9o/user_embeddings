@@ -11,10 +11,6 @@ from tqdm.asyncio import tqdm_asyncio
 # Assuming these are accessible from the new location
 # Adjust the import path if necessary based on your project structure
 from user_embeddings.utils.get_text_completion import get_text_completion
-from user_embeddings.utils.teacher_prompt import (
-    get_teacher_prompt,
-    parse_teacher_prompt_output,
-)
 
 
 async def run_model(model_name: str, prompt: str) -> str:
@@ -110,23 +106,84 @@ def parse_judge_output(
         return ranking, rationale, any_correct
 
     except (json.JSONDecodeError, IndexError, TypeError) as e:
-        print(f"Error parsing judge output: {e}\\\\nRaw output:\\\\n{judge_response}")
+        print(f"Error parsing judge output: {e}\nRaw output:\n{judge_response}")
         return None, None, None
 
 
 def load_and_sample_data(
-    input_dir: Path, num_samples: int, seed: Optional[int]
+    input_source_path: Path, num_samples: int, seed: Optional[int]
 ) -> Optional[pl.DataFrame]:
-    """Loads data from CSV files in the input directory and samples it."""
-    print(f"Loading data from {input_dir}...")
-    all_files = list(input_dir.glob("test_output_*.csv"))
-    if not all_files:
-        print(f"No CSV files found in {input_dir}")
+    """Loads data from a specific CSV file or all test_output_*.csv files in a directory and samples it."""
+    full_df = None
+    required_column = "formatted_context"
+
+    if input_source_path.is_file():
+        print(f"Loading data from file: {input_source_path}...")
+        try:
+            full_df = pl.read_csv(input_source_path)
+            if required_column not in full_df.columns:
+                print(
+                    f"Error: '{required_column}' column not found in {input_source_path}"
+                )
+                return None
+        except Exception as e:
+            print(f"Error reading CSV file {input_source_path}: {e}")
+            return None
+
+    elif input_source_path.is_dir():
+        print(f"Loading data from directory: {input_source_path}...")
+        glob_pattern = "test_output_*.csv"
+        all_files = list(input_source_path.glob(glob_pattern))
+
+        if not all_files:
+            print(f"No files matching '{glob_pattern}' found in {input_source_path}")
+            return None
+
+        print(f"Found {len(all_files)} files matching pattern.")
+        df_list = []
+        for f in all_files:
+            print(f"  Reading {f.name}...")
+            try:
+                df = pl.read_csv(f)
+                if required_column not in df.columns:
+                    print(
+                        f"  Warning: '{required_column}' column not found in {f.name}. Skipping file."
+                    )
+                    continue
+                df_list.append(df)
+            except Exception as e:
+                print(f"  Error reading file {f.name}: {e}. Skipping file.")
+                continue
+
+        if not df_list:
+            print(f"No valid CSV files with '{required_column}' column could be read.")
+            return None
+
+        try:
+            full_df = pl.concat(
+                df_list, how="vertical_relaxed"
+            )  # Use vertical_relaxed for schema flexibility
+        except Exception as e:
+            print(f"Error concatenating DataFrames: {e}")
+            return None
+
+    else:
+        print(
+            f"Error: Input source path is neither a file nor a directory: {input_source_path}"
+        )
         return None
 
-    df_list = [pl.read_csv(f) for f in all_files]
-    full_df = pl.concat(df_list)
+    # --- Sampling Logic (applies to both single file and combined data) ---
+    if full_df is None or len(full_df) == 0:
+        print("No data loaded after processing input source.")
+        return None
+
     print(f"Total rows loaded: {len(full_df)}")
+
+    # Ensure 'input_data' column exists after potential concatenation
+    if required_column not in full_df.columns:
+        print(f"Error: '{required_column}' column is missing after processing files.")
+        return None
 
     if len(full_df) < num_samples:
         print(
@@ -142,24 +199,34 @@ def load_and_sample_data(
 
 
 async def run_and_parse_test_models(
-    sample_df: pl.DataFrame, models_to_test: List[str]
+    sample_df: pl.DataFrame,
+    models_to_test: List[str],
+    instruction_prompt: str,
 ) -> List[Dict[str, Any]]:
-    """Runs test models concurrently and parses their outputs."""
+    """Runs test models concurrently and parses their outputs using the provided instruction prompt."""
     test_model_tasks = []
     task_metadata = []
     print("Preparing test model tasks...")
     for i, row in enumerate(sample_df.iter_rows(named=True)):
-        input_context = row["formatted_context"]
-        instruction_prompt = get_teacher_prompt(input_context)
+        # Use the 'formatted_context' column
+        input_data = row["formatted_context"]
+        # Removed call to get_teacher_prompt
+        # instruction_prompt = get_teacher_prompt(input_context)
+
+        # Create the full prompt for the model
+        # (You might want to format this differently depending on prompt structure)
+        model_prompt = f"{instruction_prompt}\n\nINPUT DATA:\n---\n{input_data}\n---"
+
         for model in models_to_test:
-            task = asyncio.create_task(run_model(model, instruction_prompt))
+            # Pass the combined prompt to run_model
+            task = asyncio.create_task(run_model(model, model_prompt))
             test_model_tasks.append(task)
             task_metadata.append(
                 {
                     "sample_index": i,
                     "model": model,
-                    "input_context": input_context,
-                    "instruction_prompt": instruction_prompt,
+                    "input_data": input_data,  # Store input_data (which is formatted_context)
+                    # "instruction_prompt": instruction_prompt, # No need to store static prompt here
                 }
             )
 
@@ -179,25 +246,33 @@ async def run_and_parse_test_models(
 
         if not sample_intermediate_results[sample_index]:
             sample_intermediate_results[sample_index] = {
-                "input_context": meta["input_context"],
-                "instruction_prompt": meta["instruction_prompt"],
+                "input_data": meta["input_data"],
+                # Store instruction_prompt at sample level if needed later (e.g., for judge)
+                # "instruction_prompt": instruction_prompt,
                 "raw_outputs": {},
                 "parsed_outputs": {},
             }
 
         sample_intermediate_results[sample_index]["raw_outputs"][model] = raw_output
 
+        # Placeholder parsing - replace with actual logic if needed
         if raw_output.startswith("ERROR:"):
             parsed_output_str = raw_output
         else:
-            try:
-                parsed_output = parse_teacher_prompt_output(raw_output)
-                parsed_output_str = str(parsed_output)
-            except Exception as parse_error:
-                print(
-                    f"Error parsing output from {model} for sample {sample_index}: {parse_error}"
-                )
-                parsed_output_str = f"ERROR PARSING OUTPUT: {parse_error}\\\\nRAW OUTPUT:\\\\n{raw_output}"
+            # Removed call to parse_teacher_prompt_output
+            # try:
+            #     parsed_output = parse_teacher_prompt_output(raw_output)
+            #     parsed_output_str = str(parsed_output)
+            # except Exception as parse_error:
+            #     print(
+            #         f"Error parsing output from {model} for sample {sample_index}: {parse_error}"
+            #     )
+            #     parsed_output_str = f"ERROR PARSING OUTPUT: {parse_error}\\nRAW OUTPUT:\\n{raw_output}"
+
+            # Simple placeholder: just use the raw output as parsed for now
+            # You might want to implement JSON parsing or regex here based on expected output format
+            parsed_output_str = raw_output.strip()
+
         sample_intermediate_results[sample_index]["parsed_outputs"][model] = (
             parsed_output_str
         )
@@ -206,7 +281,9 @@ async def run_and_parse_test_models(
 
 
 async def run_judge_evaluation(
-    sample_intermediate_results: List[Dict[str, Any]], judge_model: str
+    sample_intermediate_results: List[Dict[str, Any]],
+    judge_model: str,
+    instruction_prompt: str,
 ) -> Dict[int, Tuple[str, Dict[str, str]]]:
     """Runs the judge model for each sample, returning responses and name mappings."""
     judge_tasks = []
@@ -218,9 +295,10 @@ async def run_judge_evaluation(
             and intermediate_data["parsed_outputs"]
             and len(intermediate_data["parsed_outputs"]) > 1
         ):
+            # Pass the static instruction_prompt to the judge prompt creation
             judge_prompt, mask_map = create_judge_prompt(
-                intermediate_data["instruction_prompt"],
-                intermediate_data["input_context"],
+                instruction_prompt,
+                intermediate_data["input_data"],
                 intermediate_data["parsed_outputs"],
             )
             task = asyncio.create_task(run_model(judge_model, judge_prompt))
@@ -255,8 +333,9 @@ def aggregate_results(
     judge_response_map: Dict[int, Tuple[str, Dict[str, str]]],
     models_to_test: List[str],
     effective_seed: int,
+    prompt_module_name: str,
 ) -> List[Dict[str, Any]]:
-    """Aggregates results including inputs, outputs, ranks (translated), rationale, correctness, and seed."""
+    """Aggregates results including inputs, outputs, ranks (translated), rationale, correctness, seed, and prompt name."""
     print("Processing judge results and aggregating final data...")
     results_data = []
 
@@ -299,7 +378,8 @@ def aggregate_results(
                 )
                 ranking_original = None  # Invalidate if translation fails
 
-        input_context = intermediate_data.get("input_context", "ERROR: Input not found")
+        # Use input_data which should be stored in intermediate results
+        input_context = intermediate_data.get("input_data", "ERROR: Input not found")
         input_length = len(input_context) if isinstance(input_context, str) else -1
 
         result_row = {
@@ -312,6 +392,7 @@ def aggregate_results(
             ),
             "judge_any_correct": any_correct if any_correct is not None else "ERROR",
             "seed": effective_seed,
+            "prompt_name": prompt_module_name,
         }
 
         rank_map = {}
