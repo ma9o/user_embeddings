@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
@@ -158,6 +159,11 @@ parser.add_argument(
     default=DEFAULT_SEED,
     help="Random seed for sampling. Defaults to current time if None.",
 )
+parser.add_argument(
+    "--debug",
+    action="store_true",  # Makes it a flag, default is False
+    help="Enable debug printing for steps like rationale unmasking.",
+)
 
 
 async def main():
@@ -229,8 +235,9 @@ async def main():
         )
         print(f"Sampling from CSV files in directory: {input_source_path}")
 
-    # Construct output filename with workflow name
-    output_filename = f"llm_eval_judge-{judge_prompt_module_name}_workflow-{selected_workflow_name}_{input_data_stem}_seed_{effective_seed}.csv"
+    # Construct output filename with workflow name and timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_filename = f"llm_eval_judge-{judge_prompt_module_name}_workflow-{selected_workflow_name}_{input_data_stem}_seed_{effective_seed}_{timestamp}.csv"
     output_file_path = args.output_dir / output_filename
 
     # Load data (using existing helper)
@@ -269,6 +276,7 @@ async def main():
         selected_workflow_name,  # Pass workflow name
         judge_prompt_module_name,
         selected_workflow,  # Pass workflow definition for context if needed
+        debug=args.debug,  # Pass the debug flag
     )
     results_df = pl.DataFrame(results_data)
 

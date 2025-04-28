@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import polars as pl
+from json_repair import repair_json
 from pydantic import BaseModel, ValidationError
 from tqdm.asyncio import tqdm_asyncio
 
@@ -235,6 +236,8 @@ async def run_and_parse_test_models(
 
                         if output_model:
                             try:
+                                # Use json_repair before parsing
+                                json_str = repair_json(json_str)
                                 # Parse and validate using the Pydantic model
                                 parsed_data = output_model.model_validate_json(json_str)
                                 # Merge the validated data (as a dict) into the model's merged JSON
@@ -347,6 +350,7 @@ def aggregate_results(
     workflow_name: str,
     judge_prompt_module_name: str,
     workflow: List[Dict[str, Any]],
+    debug: bool = False,  # Add debug flag
 ) -> List[Dict[str, Any]]:
     """Aggregates results using prompt module names as task IDs."""
     print("Processing judge results and aggregating final data...")
@@ -390,17 +394,34 @@ def aggregate_results(
         input_length = len(input_context) if isinstance(input_context, str) else -1
         unmasked_rationale = rationale
         if rationale and original_to_mask_map:
+            # Add debug print here
+            if debug:
+                print(
+                    f"DEBUG: original_to_mask_map for sample {i}: {original_to_mask_map}"
+                )
+
+            # Sort map items by length of the masked name (value) in descending order
             sorted_map_items = sorted(
                 original_to_mask_map.items(),
                 key=lambda item: len(item[1]),
                 reverse=True,
             )
             for original_name, masked_name in sorted_map_items:
-                # Use regex to replace based on leading word boundary and sorting by length
-                unmasked_rationale = re.sub(
-                    rf"\\b{re.escape(masked_name)}",  # Removed trailing \\b
-                    original_name,
-                    unmasked_rationale,
+                # Use simple string replace
+                new_rationale = unmasked_rationale.replace(masked_name, original_name)
+
+                unmasked_rationale = (
+                    new_rationale  # Update rationale for next iteration
+                )
+        else:
+            # Handle case where rationale or map is missing, maybe print if debugging
+            if debug and not original_to_mask_map and judge_data:
+                print(
+                    f"DEBUG: original_to_mask_map is missing for sample {i}, although judge_data exists."
+                )
+            if debug and not rationale and judge_data:
+                print(
+                    f"DEBUG: Rationale is missing for sample {i}, although judge_data exists."
                 )
 
         result_row: Dict[str, Any] = {
