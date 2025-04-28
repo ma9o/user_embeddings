@@ -1,7 +1,10 @@
 import asyncio
+import json
+import re
 from typing import Any, Callable, Dict, List, Optional, TypedDict
 
 import polars as pl
+from json_repair import repair_json
 from tqdm.asyncio import tqdm_asyncio
 
 # Assuming get_text_completion is available via relative import or PYTHONPATH
@@ -17,6 +20,11 @@ class PromptStage(TypedDict):
     prompts: List[str]  # List of prompt module names (used as task IDs)
     input_from: Optional[List[str]]  # List of task IDs from previous stage(s)
     input_formatter: Optional[str]  # Name of formatter function
+
+
+# --- Constants ---
+# Key used to store the automatically merged JSON output from the final stage
+FINAL_MERGED_OUTPUT_KEY = "_final_merged_output"
 
 
 # --- Input Formatters ---
@@ -146,21 +154,26 @@ async def execute_workflow(
     workflow: List[PromptStage],  # Use the defined type
     available_prompts: Dict[str, str],  # Map: prompt_module_name -> prompt_text
     input_formatters: Dict[str, Callable[[Dict[str, str]], str]],
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Executes a defined workflow for a single model and initial input.
+    If the final stage involves multiple parallel prompts that all successfully
+    return valid JSON, their outputs will be automatically parsed and merged
+    into a single dictionary stored under the key '_final_merged_output'.
 
     Args:
         model_name: The name of the LLM to use.
         initial_input: The starting input data for the first stage.
-        workflow: List of stage definitions. Each dict has 'stage', 'prompts' (List[prompt_module_name]),
-                  and optionally 'input_from' (List[prompt_module_name]), 'input_formatter' (str).
+        workflow: List of stage definitions.
         available_prompts: A dictionary mapping prompt module names to actual prompt text.
         input_formatters: A dictionary mapping formatter names to callable functions.
 
     Returns:
-        A dictionary mapping prompt_module_name (used as task_id) to its string output.
+        A dictionary containing:
+            - Mappings from prompt_module_name (task_id) to its raw string output.
+            - Optionally, the key '_final_merged_output' mapping to a dictionary
+              if automatic merging of the final stage's JSON outputs was successful.
     """
-    intermediate_results: Dict[str, str] = {}
+    intermediate_results: Dict[str, Any] = {}
     current_stage_input = initial_input
     sorted_workflow = sorted(
         workflow, key=lambda x: x["stage"]
@@ -180,7 +193,10 @@ async def execute_workflow(
                 for prev_stage in sorted_workflow:
                     if prev_stage["stage"] == stage_num - 1:
                         for task_id in prev_stage["prompts"]:
-                            if task_id in intermediate_results:
+                            # Check if previous result was a string (could be merged dict later)
+                            if task_id in intermediate_results and isinstance(
+                                intermediate_results[task_id], str
+                            ):
                                 prev_stage_outputs[task_id] = intermediate_results[
                                     task_id
                                 ]
@@ -191,41 +207,47 @@ async def execute_workflow(
                     print(
                         f"Warning: Stage {stage_num} model {model_name} using single output from stage {stage_num - 1} as input due to missing 'input_from'."
                     )
-                else:
+                elif len(prev_stage_outputs) != 1 and stage_num > 1:
                     error_msg = (
                         f"ERROR: Ambiguous input for stage {stage_num} model {model_name}. "
-                        f"Need 'input_from' when previous stage has multiple/no/failed outputs ({len(prev_stage_outputs)} valid found)."
+                        f"Need 'input_from' when previous stage has multiple/no/failed outputs ({len(prev_stage_outputs)} valid string outputs found)."
                     )
                     print(error_msg)
-                    # Mark all tasks in this stage as failed
                     for prompt_module_name in prompts_in_stage:
                         intermediate_results[prompt_module_name] = error_msg
-                    break  # Stop processing workflow
+                    break
 
             else:  # input_from_tasks is specified
                 try:
-                    # Gather required inputs using prompt_module_names as keys
-                    inputs_to_format = {
-                        task_id: intermediate_results[task_id]
-                        for task_id in input_from_tasks
-                        if task_id in intermediate_results
-                        and not intermediate_results[task_id].startswith("ERROR:")
-                    }
-                    # Check if any required input is missing
-                    if len(inputs_to_format) != len(input_from_tasks):
+                    # Gather required inputs (ensure they are strings)
+                    inputs_to_format = {}
+                    all_inputs_valid = True
+                    for task_id in input_from_tasks:
+                        input_val = intermediate_results.get(task_id)
+                        if isinstance(input_val, str) and not input_val.startswith(
+                            "ERROR:"
+                        ):
+                            inputs_to_format[task_id] = input_val
+                        else:
+                            all_inputs_valid = False
+                            break  # Missing or non-string input
+
+                    if not all_inputs_valid or len(inputs_to_format) != len(
+                        input_from_tasks
+                    ):
                         missing_tasks = set(input_from_tasks) - set(
                             inputs_to_format.keys()
                         )
                         error_msg = (
-                            f"ERROR: Missing required inputs {list(missing_tasks)} for stage {stage_num} "
-                            f"model {model_name} due to previous errors."
+                            f"ERROR: Missing/invalid required string inputs {list(missing_tasks)} for stage {stage_num} "
+                            f"model {model_name} due to previous errors or non-string outputs."
                         )
                         print(error_msg)
                         for prompt_module_name in prompts_in_stage:
                             intermediate_results[prompt_module_name] = error_msg
                         break  # Stop processing
 
-                    # Apply input formatter
+                    # Apply input formatter (expects Dict[str, str])
                     if not formatter_name:
                         if len(inputs_to_format) == 1:
                             current_stage_input = list(inputs_to_format.values())[0]
@@ -248,15 +270,6 @@ async def execute_workflow(
                         formatter_func = input_formatters[formatter_name]
                         current_stage_input = formatter_func(inputs_to_format)
 
-                except KeyError as e:
-                    error_msg = (
-                        f"ERROR: Required input task_id '{e}' for stage {stage_num} not found "
-                        f"in previous results for model {model_name}."
-                    )
-                    print(error_msg)
-                    for prompt_module_name in prompts_in_stage:
-                        intermediate_results[prompt_module_name] = error_msg
-                    break
                 except Exception as e:
                     error_msg = f"ERROR: Failed to format inputs for stage {stage_num} model {model_name}: {e}"
                     print(error_msg)
@@ -266,11 +279,14 @@ async def execute_workflow(
 
         # 2. Run prompts in the current stage concurrently
         stage_tasks = []
-        # Keep track of which prompt_module_name corresponds to each task
         tasks_to_run_ids: List[str] = []
         for prompt_module_name in prompts_in_stage:
             try:
                 instruction_prompt = available_prompts[prompt_module_name]
+                # Ensure current_stage_input is a string before formatting prompt
+                if not isinstance(current_stage_input, str):
+                    raise TypeError(f"Input for stage {stage_num} is not a string.")
+
                 model_prompt = (
                     f"{instruction_prompt}\n\nINPUT DATA:\n---\n"
                     f"{current_stage_input}\n---"
@@ -294,7 +310,7 @@ async def execute_workflow(
         else:
             stage_results = []
 
-        # 4. Store results using prompt_module_name as the key
+        # 4. Store results using prompt_module_name as the key (still storing raw strings)
         for task_id, result in zip(tasks_to_run_ids, stage_results):
             intermediate_results[task_id] = result
             if result.startswith("ERROR:"):
@@ -302,11 +318,69 @@ async def execute_workflow(
                     f"Task '{task_id}' in stage {stage_num} failed for model {model_name}."
                 )
 
-    # Return all results keyed by prompt_module_name
+    # --- Post-Workflow: Attempt Final Stage JSON Merging ---
+    if sorted_workflow:  # Check if workflow is not empty
+        final_stage_def = sorted_workflow[-1]
+        final_stage_task_ids = final_stage_def["prompts"]
+
+        if len(final_stage_task_ids) > 1:
+            merged_data = {}
+            can_merge = True
+            parse_errors = []
+
+            for task_id in final_stage_task_ids:
+                raw_output = intermediate_results.get(task_id)
+                if not isinstance(raw_output, str) or raw_output.startswith("ERROR:"):
+                    can_merge = False
+                    parse_errors.append(
+                        f"Task '{task_id}': Output missing or is error."
+                    )
+                    break  # Cannot merge if any task failed
+
+                # Attempt to parse JSON from the output string
+                try:
+                    # Basic JSON block extraction (like in judge parsing)
+                    match = re.search(
+                        r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw_output, re.DOTALL
+                    )
+                    if match:
+                        json_str = match.group(1)
+                    else:
+                        # Try repairing if no markdown block found
+                        json_str = repair_json(raw_output.strip())
+
+                    # Attempt to parse the cleaned/repaired string
+                    parsed_dict = json.loads(json_str)
+
+                    if isinstance(parsed_dict, dict):
+                        merged_data.update(parsed_dict)  # Merge the dictionaries
+                    else:
+                        can_merge = False
+                        parse_errors.append(
+                            f"Task '{task_id}': Parsed JSON is not a dictionary."
+                        )
+                        break
+
+                except (json.JSONDecodeError, TypeError) as e:
+                    can_merge = False
+                    parse_errors.append(
+                        f"Task '{task_id}': JSON parsing failed - {e}. Raw: {raw_output[:50]}..."
+                    )
+                    # Optionally try repair_json here as well if initial parse fails
+                    break
+
+            if can_merge:
+                intermediate_results[FINAL_MERGED_OUTPUT_KEY] = merged_data
+            else:
+                # Optionally store the errors?
+                # intermediate_results[FINAL_MERGED_OUTPUT_KEY] = {"error": "Merge failed", "details": parse_errors}
+                pass  # Add pass to fix empty else block
+
+    # Return all results (including potentially merged final output)
     return intermediate_results
 
 
-# NEW FUNCTION to orchestrate runs over samples and models
+# Updated FUNCTION to orchestrate runs over samples and models
 async def run_workflow_on_samples(
     sample_df: pl.DataFrame,
     models_to_test: List[str],
@@ -317,6 +391,7 @@ async def run_workflow_on_samples(
 ) -> List[Dict[str, Any]]:
     """
     Runs a defined workflow concurrently across multiple samples and models.
+    Handles the potential automatically merged final output from execute_workflow.
 
     Args:
         sample_df: Polars DataFrame with input data.
@@ -329,7 +404,9 @@ async def run_workflow_on_samples(
     Returns:
         A list of dictionaries, one per sample. Each dictionary contains:
             'input_data': The initial input for the sample.
-            'model_outputs': A dict mapping model_name -> {task_id: output_str}.
+            'model_outputs': A dict mapping model_name -> result_dict, where
+                             result_dict contains task_id: output_str mappings
+                             and potentially '_final_merged_output': merged_dict.
     """
     all_tasks = []
     task_metadata = []  # Stores sample_index, model, initial_input
@@ -360,8 +437,8 @@ async def run_workflow_on_samples(
             )
 
     print(f"Running {len(all_tasks)} workflow tasks concurrently...")
-    # Each result is a dict: {prompt_name: output} for one model/sample run
-    all_individual_results = await tqdm_asyncio.gather(
+    # Each result is a dict: {prompt_name: output, potentially _final_merged_output: dict}
+    all_individual_results: List[Dict[str, Any]] = await tqdm_asyncio.gather(
         *all_tasks, desc="Running Test Model Workflows", unit="task"
     )
 
@@ -372,7 +449,7 @@ async def run_workflow_on_samples(
         {"input_data": None, "model_outputs": {}} for _ in range(len(sample_df))
     ]
 
-    for i, task_outputs in enumerate(all_individual_results):
+    for i, workflow_result_dict in enumerate(all_individual_results):
         meta = task_metadata[i]
         sample_index = meta["sample_index"]
         model = meta["model"]
@@ -381,7 +458,8 @@ async def run_workflow_on_samples(
         if results_by_sample[sample_index]["input_data"] is None:
             results_by_sample[sample_index]["input_data"] = meta["initial_input_data"]
 
-        # Store results for this model, keyed by prompt_module_name
-        results_by_sample[sample_index]["model_outputs"][model] = task_outputs
+        # Store the entire result dictionary (including merged output key if present)
+        # for this model under the 'model_outputs' key for the sample.
+        results_by_sample[sample_index]["model_outputs"][model] = workflow_result_dict
 
     return results_by_sample

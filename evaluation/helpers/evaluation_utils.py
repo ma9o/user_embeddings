@@ -12,6 +12,7 @@ from tqdm.asyncio import tqdm_asyncio
 
 # Import the NEW orchestrator and the single prompt runner
 from user_embeddings.utils.llm.workflow_executor import (
+    FINAL_MERGED_OUTPUT_KEY,
     _run_single_prompt,
     run_workflow_on_samples,
 )
@@ -172,21 +173,23 @@ async def run_and_parse_test_models(
     available_output_models: Dict[str, type[BaseModel]],
 ) -> List[Dict[str, Any]]:
     """
-    Runs test models using the workflow orchestrator and parses final outputs for the judge.
-    Also validates and merges JSON outputs from final stage tasks using Pydantic models.
+    Runs test models using the workflow orchestrator.
+    Extracts the final merged JSON output (if available from the executor)
+    and prepares a string representation for the judge.
     """
     # Call the orchestrator from the utils module
+    # It now potentially returns pre-merged final JSON output
     raw_results_by_sample = await run_workflow_on_samples(
         sample_df=sample_df,
         models_to_test=models_to_test,
         workflow=workflow,
         available_prompts=available_prompts,
         input_formatters=input_formatters,
-        input_column="formatted_context",  # Assuming this is the standard input column
+        input_column="formatted_context",
     )
 
-    # --- Parse final outputs for the judge ---
-    print("Parsing final outputs for judge...")
+    # --- Process results to extract merged JSON and create judge input string ---
+    print("Processing workflow results and preparing judge inputs...")
     parsed_results: List[Dict[str, Any]] = []
     final_stage_task_ids: List[str] = workflow[-1]["prompts"]
 
@@ -194,91 +197,114 @@ async def run_and_parse_test_models(
         # Initialize the structure expected by downstream functions
         parsed_sample_data = {
             "input_data": sample_data["input_data"],
-            "model_outputs": sample_data["model_outputs"],  # Keep raw outputs
-            "final_parsed_outputs": {},  # Populate this
-            "final_merged_json": {},  # Add a new field to store the MERGED JSON from final stage tasks
+            "model_outputs": sample_data[
+                "model_outputs"
+            ],  # Keep raw outputs {model: {task: output}}
+            "final_parsed_outputs": {},  # String representation for judge
+            "final_merged_json": {},  # Merged JSON dictionary
         }
 
-        # Add a new field to store the MERGED JSON from final stage tasks
-        parsed_sample_data["final_merged_json"] = {}
+        model_run_outputs = sample_data.get("model_outputs", {})
+        for model, workflow_result_dict in model_run_outputs.items():
+            # workflow_result_dict contains {task_id: str_output, ..., _final_merged_output: dict}
 
-        model_outputs = sample_data.get("model_outputs", {})
-        for model, task_outputs in model_outputs.items():
-            final_outputs_for_judge = {}
-            final_merged_json_for_model = {}  # Store merged JSON per model
-            parsing_error = False
-            for task_id in final_stage_task_ids:  # task_id is prompt_module_name
-                output = task_outputs.get(task_id)
-                if output is None:
-                    print(
-                        f"Warning: Final task ID '{task_id}' missing for model {model}. Marking as error."
+            # 1. Extract the merged JSON if the executor produced it
+            merged_json_output = workflow_result_dict.get(FINAL_MERGED_OUTPUT_KEY)
+
+            if isinstance(merged_json_output, dict):
+                # Successfully merged by executor
+                parsed_sample_data["final_merged_json"][model] = merged_json_output
+                # Create string representation for the judge from the merged dict
+                try:
+                    parsed_final_output_str = json.dumps(
+                        merged_json_output, indent=2, ensure_ascii=False
                     )
-                    final_outputs_for_judge[task_id] = "ERROR: Output missing"
-                    parsing_error = True
-                elif output.startswith("ERROR:"):
-                    final_outputs_for_judge[task_id] = output
-                    parsing_error = True
-                else:
-                    final_outputs_for_judge[task_id] = output.strip()
-                    # Attempt to parse the output as JSON and merge
-                    try:
-                        # Basic JSON block extraction (like in judge parsing)
-                        match = re.search(
-                            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", output, re.DOTALL
+                except TypeError:
+                    parsed_final_output_str = (
+                        "ERROR: Failed to serialize merged JSON from executor"
+                    )
+                    # Keep the dict in final_merged_json even if serialization fails
+
+            else:
+                # No merged output from executor (e.g., single final task, merge failed, or error)
+                # Fallback: Create judge input string by joining individual final task outputs
+                # (This retains previous behavior for non-merge cases)
+                final_outputs_for_judge = {}
+                parsing_error = False
+                for task_id in final_stage_task_ids:
+                    output = workflow_result_dict.get(task_id)
+                    if output is None:
+                        final_outputs_for_judge[task_id] = "ERROR: Output missing"
+                        parsing_error = True
+                    elif isinstance(output, str) and output.startswith("ERROR:"):
+                        final_outputs_for_judge[task_id] = output
+                        parsing_error = True
+                    elif isinstance(output, str):
+                        final_outputs_for_judge[task_id] = output.strip()
+                    else:
+                        # Handle unexpected output types (e.g., if merge failed and left non-string)
+                        final_outputs_for_judge[task_id] = (
+                            f"ERROR: Unexpected output type for {task_id}"
                         )
-                        if match:
-                            json_str = match.group(1)
-                        else:
-                            json_str = output.strip()
+                        parsing_error = True
 
-                        # Find the Pydantic model for this task ID
-                        output_model = available_output_models.get(task_id)
+                # Combine final outputs for the judge (simple join)
+                if parsing_error:
+                    parsed_final_output_str = (
+                        "ERROR: One or more final stage outputs failed or missing."
+                    )
+                elif len(final_outputs_for_judge) == 1:
+                    parsed_final_output_str = list(final_outputs_for_judge.values())[0]
+                elif len(final_outputs_for_judge) > 1:
+                    # Default: Simple join for judge input when multiple non-merged outputs
+                    parsed_final_output_str = "\n---\n".join(
+                        f"Output from {tid}:\n{out}"
+                        for tid, out in sorted(
+                            final_outputs_for_judge.items()
+                        )  # Sort for consistency
+                    )
+                else:  # No valid final outputs found at all
+                    parsed_final_output_str = "ERROR: No valid final outputs found."
 
-                        if output_model:
-                            try:
-                                # Use json_repair before parsing
-                                json_str = repair_json(json_str)
-                                # Parse and validate using the Pydantic model
-                                parsed_data = output_model.model_validate_json(json_str)
-                                # Merge the validated data (as a dict) into the model's merged JSON
-                                final_merged_json_for_model.update(
-                                    parsed_data.model_dump()
-                                )
-                            except ValidationError as ve:
-                                print(
-                                    f"Warning: Pydantic validation failed for task '{task_id}', model '{model}': {ve}. Skipping merge."
-                                )
-                        else:
-                            # If no Pydantic model is defined for this final stage task ID
-                            print(
-                                f"Warning: No Pydantic output model found in mapping for final task '{task_id}'. Cannot validate or merge its JSON output."
-                            )
+                # Since merging didn't happen/failed in executor, merged_json is empty/error
+                parsed_sample_data["final_merged_json"][model] = {
+                    "error": "Automatic merge did not occur or failed in executor"
+                }
+                # Optional: Could add more details if the executor provided them
 
-                    except (json.JSONDecodeError, TypeError) as e:
-                        # This might catch errors during the initial JSON block extraction/stripping
-                        print(
-                            f"Warning: Could not parse JSON output for task '{task_id}', model '{model}': {e}. Raw output: {output[:100]}..."
-                        )
-                        # Mark merge as failed?
-
-            # Combine final outputs for the judge (simple join)
-            if parsing_error:
-                parsed_final_output_str = (
-                    "ERROR: One or more final stage outputs failed."
-                )
-            elif len(final_outputs_for_judge) == 1:
-                parsed_final_output_str = list(final_outputs_for_judge.values())[0]
-            elif len(final_outputs_for_judge) > 1:
-                # Default: Simple join for judge input when multiple outputs
-                parsed_final_output_str = "\n---\n".join(
-                    f"Output from {tid}:\n{out}"
-                    for tid, out in final_outputs_for_judge.items()
-                )
-            else:  # No valid final outputs
-                parsed_final_output_str = "ERROR: No valid final outputs found."
-
+            # Store the string representation (either serialized JSON or fallback join)
             parsed_sample_data["final_parsed_outputs"][model] = parsed_final_output_str
-            parsed_sample_data["final_merged_json"][model] = final_merged_json_for_model
+
+            # --- Optional: Individual Task Validation (using Pydantic) ---
+            # We can still validate individual task outputs here if needed, even if merging is done upstream
+            # This code block is optional and depends on whether you need this validation
+            validated_individual_outputs = {}
+            for task_id in final_stage_task_ids:
+                raw_output = workflow_result_dict.get(task_id)
+                output_model = available_output_models.get(task_id)
+                if (
+                    isinstance(raw_output, str)
+                    and not raw_output.startswith("ERROR:")
+                    and output_model
+                ):
+                    try:
+                        match = re.search(
+                            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
+                            raw_output,
+                            re.DOTALL,
+                        )
+                        json_str = (
+                            match.group(1) if match else repair_json(raw_output.strip())
+                        )
+                        parsed_data = output_model.model_validate_json(json_str)
+                        validated_individual_outputs[task_id] = parsed_data.model_dump()
+                        # Could store these validated outputs somewhere if needed, e.g.:
+                        # parsed_sample_data.setdefault("validated_task_outputs", {}).setdefault(model, {})[task_id] = validated_individual_outputs[task_id]
+                    except (ValidationError, json.JSONDecodeError, TypeError) as e:
+                        print(
+                            f"Warning: Pydantic validation failed for individual task '{task_id}', model '{model}': {e}. Output not used for validation store."
+                        )
+            # End Optional Validation Block
 
         parsed_results.append(parsed_sample_data)
 
@@ -717,22 +743,49 @@ async def run_constraint_judge_evaluation(
     print(f"Preparing constraint judge tasks for model '{model_to_evaluate}'...")
 
     for i, sample_data in enumerate(sample_workflow_results):
-        # Get the FINAL PARSED output for the specific model being evaluated
-        model_final_output = sample_data.get("final_parsed_outputs", {}).get(
+        # Get the FINAL MERGED JSON output for the specific model being evaluated
+        model_final_merged_json = sample_data.get("final_merged_json", {}).get(
             model_to_evaluate
         )
 
-        if model_final_output is None or model_final_output.startswith("ERROR:"):
-            print(
-                f"Skipping constraint judge for sample {i}: Final output for model '{model_to_evaluate}' not found or is an error."
-            )
-            continue
+        # Check if the merged JSON exists and is a dictionary
+        if not isinstance(model_final_merged_json, dict) or not model_final_merged_json:
+            # Attempt to retrieve the parsed output as a fallback, if merged failed
+            model_final_output_fallback = sample_data.get(
+                "final_parsed_outputs", {}
+            ).get(model_to_evaluate)
+            if (
+                model_final_output_fallback is None
+                or model_final_output_fallback.startswith("ERROR:")
+            ):
+                print(
+                    f"Skipping constraint judge for sample {i}: Neither merged JSON nor valid parsed output found for model '{model_to_evaluate}'."
+                )
+                continue
+            else:
+                # Use the fallback if merged JSON is invalid but parsed output exists
+                print(
+                    f"Warning: Using fallback parsed output for sample {i}, model '{model_to_evaluate}' as merged JSON was invalid/missing."
+                )
+                model_output_for_judge = model_final_output_fallback
+        else:
+            # Serialize the valid merged JSON dictionary to a string for the judge
+            try:
+                # Use compact separators to minimize whitespace, ensure_ascii=False for broader char support
+                model_output_for_judge = json.dumps(
+                    model_final_merged_json, separators=(",", ":"), ensure_ascii=False
+                )
+            except TypeError as e:
+                print(
+                    f"Error serializing merged JSON for sample {i}, model '{model_to_evaluate}': {e}. Skipping."
+                )
+                continue
 
-        # Create the specific prompt for the constraint judge
+        # Create the specific prompt for the constraint judge using the selected output
         judge_prompt = create_constraint_judge_prompt(
             constraints_prompt=judge_constraints_prompt,
             input_data=sample_data["input_data"],
-            model_output=model_final_output,
+            model_output=model_output_for_judge,  # Use the serialized JSON or fallback
         )
 
         task = asyncio.create_task(_run_single_prompt(judge_model, judge_prompt))
@@ -809,7 +862,6 @@ def aggregate_constraint_results(
         result_row: Dict[str, Any] = {
             "input": input_context,
             "input_length": input_length,
-            f"final_parsed_output_{model_to_evaluate}": final_parsed_output,
             "judge_raw_output": judge_raw_response
             if judge_raw_response
             else "Judge Skipped/Failed",
@@ -839,14 +891,35 @@ def aggregate_constraint_results(
             col_name = f"output_{task_id}_{model_to_evaluate}"
             result_row[col_name] = model_outputs_all_tasks.get(task_id, "N/A")
 
-        # Optionally, add specific fields from the final merged JSON
+        # Add the final merged JSON output (serialized) and individual fields
         if isinstance(final_merged_json, dict):
+            try:
+                # Store the complete merged JSON as a string
+                result_row[f"final_merged_output_{model_to_evaluate}"] = json.dumps(
+                    final_merged_json, separators=(",", ":"), ensure_ascii=False
+                )
+            except TypeError:
+                result_row[f"final_merged_output_{model_to_evaluate}"] = (
+                    "ERROR: Failed to serialize merged JSON"
+                )
+
+            # Also store individual keys from the merged JSON
             for key, value in final_merged_json.items():
                 col_name = f"final_{key}_{model_to_evaluate}"
-                result_row[col_name] = (
-                    json.dumps(value) if isinstance(value, (list, dict)) else str(value)
-                )
+                try:
+                    # Store lists/dicts as JSON strings, others as strings
+                    result_row[col_name] = (
+                        json.dumps(value, ensure_ascii=False)
+                        if isinstance(value, (list, dict))
+                        else str(value)
+                    )
+                except TypeError:
+                    result_row[col_name] = "ERROR: Failed to serialize value"
         else:
+            # Indicate error if final_merged_json wasn't a dict
+            result_row[f"final_merged_output_{model_to_evaluate}"] = (
+                "ERROR: Merged JSON not available or not a dict"
+            )
             result_row[f"final_merged_json_error_{model_to_evaluate}"] = (
                 "ERROR: Merged JSON not available or not a dict"
             )
