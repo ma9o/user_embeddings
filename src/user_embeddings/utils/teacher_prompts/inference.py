@@ -7,56 +7,38 @@ class InferenceOutput(BaseModel):
 
 
 PROMPT = """
-You are an Expert Information Extractor and Normalizer. Your goal is to analyze a structured summary of a conversation thread, focusing on the participant designated as 'SUBJECT'. Abstract the SUBJECT's specific actions into *direct statements* representing their knowledge, opinions, explicitly mentioned attributes (possessions, experiences, location), and core intent demonstrated *within that specific interaction*. Avoid introductory phrases like "States that..." or "Displays...". Your output MUST retain the exact overall JSON structure of the input, transforming only the content of the 'actions' list.
+You are an Expert User Profiler and Semantic Distiller.
+Your task is to analyze a pre-structured representation of a conversation, focusing on the actions attributed to 'SUBJECT', and distill these actions into a flat list of concise, atomic, self-contained statements representing their Knowledge, Opinion, Attributes, or Intent (KOAI).
 
 Input:
-A JSON object produced by the 'Interaction Analyzer and Structure Synthesizer'. This object contains:
-- "context": An NL summary of the conversation preceding the SUBJECT's actions or interleaved between them.
-- "actions": A list of NL strings, where each string describes one of the SUBJECT's specific, atomic contributions.
+A JSON object representing the structured conversation flow, derived from a previous analysis step. This object contains nested 'context' summaries (from non-SUBJECT participants) and 'actions' (atomic contributions from SUBJECT).
 
-Output Format Specification:
-Generate a single JSON object with the exact same top-level keys as the input ('context', 'actions').
-- The value for the "context" key should be copied verbatim from the input "context" value.
-- The value for the "actions" key should be a list where each element is itself a list of strings.
-- The outer list of "actions" corresponds 1-to-1 with the input "actions" list.
-- Each *inner list* contains one or more direct NL statements, representing the inferences abstracted from the *single corresponding action* in the input. Each statement MUST start with a capitalized category prefix followed by a colon.
+Output Format:
+Generate a single JSON object containing a single key "statements" whose value is a flat list of strings. Each string must represent a single, atomic KOAI statement derived from the SUBJECT's actions, prefixed with the appropriate category tag.
 
-Example Output Structure:
-{
-  "context": "The exact same context string as provided in the input.",
-  "actions": [
-    [ // Inferences derived from the FIRST action string in the input
-      "CATEGORY: Direct statement 1 about Knowledge/Opinion/Attribute/Intent.",
-      "CATEGORY: Direct statement 2 about Knowledge/Opinion/Attribute/Intent."
-    ],
-    [ // Inferences derived from the SECOND action string in the input
-      "CATEGORY: Direct statement 3 about Knowledge/Opinion/Attribute/Intent."
-    ]
-    // ... one inner list for each action string in the input actions list ...
-  ]
-}
+Core Requirements for Output Generation:
 
+1.  Analyze SUBJECT Actions in Context: Iterate through all the `action` strings attributed to SUBJECT within the input structure. Critically, interpret each `action` string by considering the `context` string(s) that immediately precede it within its list or block, as well as the `context` from any parent levels in the nested structure. This surrounding context is essential for accurate interpretation.
+2.  Abstract Conversational Format:
+    *   The output MUST be a flat list (`statements`), removing all conversational structure present in the input.
+    *   Use Direct Phrasing: State the inferred knowledge, opinion, attribute, or intent directly. Avoid conversational introductions like "States that...", "Expresses...", "Mentions...", "Asks if...", "Responds by...". Focus on the *content* of the inference. Do not add illustrative examples using `(e.g., ...)` or similar phrasing; integrate concepts directly.
+3.  Maximum Semantic Resolution & Embedded Context:
+    *   Each output statement must be semantically complete and self-contained.
+    *   Synthesize the necessary semantic context (domain, core concepts, situation type) identified from the input's `context` and `action` strings *into* the output statement itself. Use careful phrasing or bracketed additions for clarification, not illustration.
+    *   The goal is to retain full semantic nuance without needing the original input structure. Omit ephemeral details (like specific usernames of *others* - refer to them generically if needed, e.g., 'participant', 'advice-seeker').
+4.  Atomicity: Each statement in the output list must represent a single, distinct piece of knowledge, opinion, attribute, or intent. If a single input `action` string implies multiple distinct KOAI points (when analyzed with its context), generate a separate statement for each. Do not combine distinct points into one statement using 'and' or similar conjunctions.
 
-Key Principles for Abstraction and Output Generation:
+KOAI Framework Definitions:
 
-1.  Mirror Top-Level Structure: The output JSON MUST have the keys 'context' and 'actions'.
-2.  Copy Context: The input 'context' string MUST be copied directly to the output 'context' field without modification for this task.
-3.  Transform Actions to Lists of Direct Statements: Each string in the input 'actions' list maps to an *inner list* of direct inference strings in the output 'actions' list.
-4.  Direct Phrasing: State the inferred knowledge, opinion, attribute, or intent directly. Do NOT use introductory phrases like "States that...", "Expresses...", "Displays knowledge...", "Mentions...", "Appears to be...".
-5.  Focus Categories (Use CAPITALIZED Prefixes): Generate statements reflecting these aspects, prefixed with the capitalized category name followed by a colon:
-    *   `KNOWLEDGE`: (e.g., "KNOWLEDGE: Python dictionaries map keys to values.")
-    *   `OPINION`: (e.g., "OPINION: Current stock market volatility is high.")
-    *   `ATTRIBUTE`: (e.g., "ATTRIBUTE: Owns an electric vehicle.") *Only if explicitly stated.*
-    *   `INTENT`: (e.g., "INTENT: Seek advice.", "INTENT: Provide a solution.")
-6.  Generalizable Language: Use platform-agnostic terms. Avoid Reddit-specific jargon.
-7.  Interaction-Bound: Base abstractions SOLELY on the text provided for the specific action being processed and its surrounding input context.
-8.  Conciseness: Keep inference statements brief and factual based on the input action. One input action might yield one or multiple inference statements.
-9.  Output ONLY JSON: Your entire response must be the single, valid JSON object described above, enclosed in ```json ```.
+*   KNOWLEDGE: Statements reflecting factual understanding or know-how demonstrated by the SUBJECT that aligns with the LLM's general knowledge base. Must be phrased as knowledge the SUBJECT possesses.
+*   OPINION: Statements reflecting the SUBJECT's beliefs, judgments, or preferences, particularly where they might differ from neutral facts or the LLM's baseline perspective. Must be phrased as an opinion held by the SUBJECT.
+*   ATTRIBUTE: Descriptions of the SUBJECT's characteristics, possessions, or non-cognitive states derived from their statements (e.g., location, ownership, stated personal traits) that aren't primarily knowledge or opinion.
+*   INTENT: [Context-Dependent!] Describes the SUBJECT's immediate purpose or goal for acting *in that specific moment/situation* as represented in the input structure. This is driven by the immediate context (from `context` fields) and perception of others. `INTENT` statements must retain necessary situational context (phrased generically) to accurately capture the *why* behind that particular action (e.g., "Wants to achieve X [in situation Y] by doing Z").
 
 ---
 EXAMPLE:
 
-Input JSON (from Separation Step):
+Input:
 {
   "context": "A participant ('fqn') initiated a discussion seeking advice on timing stock purchases after a recent market dip, questioning if it's a buying opportunity or a 'dead cat bounce'. This participant subsequently expressed concern it might be a bounce and considered holding cash, but then weighed the possibility of short-term trading enabled by free commissions on their platform.",
   "actions": [
@@ -65,22 +47,19 @@ Input JSON (from Separation Step):
   ]
 }
 
-Correct JSON Output (Direct Statements, Capitalized Categories, Actions as Lists):
+Correct JSON Output:
 ```json
 {
-  "context": "A participant ('fqn') initiated a discussion seeking advice on timing stock purchases after a recent market dip, questioning if it's a buying opportunity or a 'dead cat bounce'. This participant subsequently expressed concern it might be a bounce and considered holding cash, but then weighed the possibility of short-term trading enabled by free commissions on their platform.",
-  "actions": [
-    [
-      "OPINION: SUBJECT believes loss avoidance outweighs commission costs in trading.",
-      "KNOWLEDGE: SUBJECT understands trade commissions and capital loss concepts.",
-    ],
-    [
-      "KNOWLEDGE: SUBJECT understands difference between long-term and short-term investment objectives.",
-      "INTENT: SUBJECT seeks clarification to provide tailored advice."
-    ]
+  "statements": [
+    "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading, particularly questioning the value of low costs if underlying risk is high.",
+    "KNOWLEDGE: Understands investment transaction costs like commissions and the concept of capital loss.",
+    "KNOWLEDGE: Recognizes that investment advice must align with the recipient's specific goals, distinguishing between approaches for long-term holding versus short-term profit seeking.",
+    "INTENT: Wants to help an advice-seeker clarify their investment strategy by prompting for core objectives [like time horizon], perceiving a potential mismatch between stated means [like focusing on low costs] and unstated goals."
   ]
 }
 ```
+
+---
 
 BEGIN TASK
 

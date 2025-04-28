@@ -25,7 +25,7 @@ async def run_model(model_name: str, prompt: str) -> str:
 
 def create_judge_prompt(
     instruction_prompt: str, input_data: str, outputs: Dict[str, str]
-) -> Tuple[str, Dict[str, str]]:
+) -> Tuple[str, Dict[str, str], Dict[str, str]]:
     """Creates the prompt for the judge LLM, shuffling and masking model names."""
     original_items = list(outputs.items())
     random.shuffle(original_items)
@@ -63,7 +63,7 @@ def create_judge_prompt(
     )
     prompt += f"The available anonymized model names are: {masked_model_names}. Return ONLY the JSON object and nothing else."
 
-    return prompt, mask_to_original_map
+    return prompt, mask_to_original_map, original_to_mask_map
 
 
 def parse_judge_output(
@@ -284,7 +284,7 @@ async def run_judge_evaluation(
     sample_intermediate_results: List[Dict[str, Any]],
     judge_model: str,
     instruction_prompt: str,
-) -> Dict[int, Tuple[str, Dict[str, str]]]:
+) -> Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]]:
     """Runs the judge model for each sample, returning responses and name mappings."""
     judge_tasks = []
     judge_task_metadata = []
@@ -296,14 +296,18 @@ async def run_judge_evaluation(
             and len(intermediate_data["parsed_outputs"]) > 1
         ):
             # Pass the static instruction_prompt to the judge prompt creation
-            judge_prompt, mask_map = create_judge_prompt(
+            # Capture all three return values from create_judge_prompt
+            judge_prompt, mask_map, original_map = create_judge_prompt(
                 instruction_prompt,
                 intermediate_data["input_data"],
                 intermediate_data["parsed_outputs"],
             )
             task = asyncio.create_task(run_model(judge_model, judge_prompt))
             judge_tasks.append(task)
-            judge_task_metadata.append({"sample_index": i, "mask_map": mask_map})
+            # Store both maps in metadata
+            judge_task_metadata.append(
+                {"sample_index": i, "mask_map": mask_map, "original_map": original_map}
+            )
         else:
             print(
                 f"Skipping judge task for sample {i} due to missing/empty or single parsed outputs."
@@ -318,24 +322,27 @@ async def run_judge_evaluation(
     else:
         print("No judge tasks to run.")
 
-    judge_response_map: Dict[int, Tuple[str, Dict[str, str]]] = {}
+    # Update the type hint for judge_response_map to reflect the stored tuple
+    judge_response_map: Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]] = {}
     for i, raw_response in enumerate(judge_responses_raw):
         meta = judge_task_metadata[i]
         sample_index = meta["sample_index"]
         mask_map = meta["mask_map"]
-        judge_response_map[sample_index] = (raw_response, mask_map)
+        original_map = meta["original_map"]  # Retrieve the original map
+        # Store the tuple (raw_response, mask_to_original_map, original_to_mask_map)
+        judge_response_map[sample_index] = (raw_response, mask_map, original_map)
 
     return judge_response_map
 
 
 def aggregate_results(
     sample_intermediate_results: List[Dict[str, Any]],
-    judge_response_map: Dict[int, Tuple[str, Dict[str, str]]],
+    judge_response_map: Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]],
     models_to_test: List[str],
     effective_seed: int,
     prompt_module_name: str,
 ) -> List[Dict[str, Any]]:
-    """Aggregates results including inputs, outputs, ranks (translated), rationale, correctness, seed, and prompt name."""
+    """Aggregates results including inputs, outputs, ranks (translated), rationale (unmasked), correctness, seed, and prompt name."""
     print("Processing judge results and aggregating final data...")
     results_data = []
 
@@ -343,9 +350,11 @@ def aggregate_results(
         judge_data = judge_response_map.get(i)
         ranking_masked, rationale, any_correct = (None, None, None)
         mask_to_original_map = None
+        original_to_mask_map = None  # Initialize original_to_mask_map
 
         if judge_data:
-            judge_response, mask_to_original_map = judge_data
+            # Unpack the original_to_mask_map as well
+            judge_response, mask_to_original_map, original_to_mask_map = judge_data
             ranking_masked, rationale, any_correct = parse_judge_output(judge_response)
         else:
             print(
@@ -382,11 +391,31 @@ def aggregate_results(
         input_context = intermediate_data.get("input_data", "ERROR: Input not found")
         input_length = len(input_context) if isinstance(input_context, str) else -1
 
+        # Unmask the rationale before storing
+        unmasked_rationale = rationale
+        if rationale and original_to_mask_map:
+            unmasked_rationale = rationale
+            # Sort by length of masked name descending to replace longer names first if needed (e.g. Model AB before Model A)
+            # Though current naming scheme ('Model A', 'Model B') makes this less critical
+            sorted_map_items = sorted(
+                original_to_mask_map.items(),
+                key=lambda item: len(item[1]),
+                reverse=True,
+            )
+            for original_name, masked_name in sorted_map_items:
+                # Use word boundaries to avoid partial replacements (e.g., replacing 'Model A' in 'Model AB')
+                # Need to escape potential regex characters in model names if they exist
+                # For simplicity, we'll assume 'Model X' format doesn't need escaping
+                unmasked_rationale = re.sub(
+                    rf"\b{re.escape(masked_name)}\b", original_name, unmasked_rationale
+                )
+
         result_row = {
             "input": input_context,
             "input_length": input_length,
-            "judge_rationale": rationale
-            if rationale
+            # Store the unmasked rationale
+            "judge_rationale": unmasked_rationale
+            if unmasked_rationale
             else (
                 "ERROR: Rationale not parsed" if judge_data else "Judge Skipped/Failed"
             ),

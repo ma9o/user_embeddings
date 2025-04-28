@@ -46,7 +46,6 @@ AVAILABLE_PROMPTS = {
     "all_in_one": all_in_one.PROMPT,
     "inference": inference.PROMPT,
     "separation": separation.PROMPT,
-    # Add other prompts here
 }
 
 # --- Default Configuration ---
@@ -54,8 +53,7 @@ DEFAULT_MODELS_TO_TEST = [
     "google/gemma-3-27b-it",
     "deepseek/deepseek-r1-distill-llama-70b",
     "deepseek/deepseek-chat-v3-0324",
-    # "meta-llama/llama-4-maverick",
-    # "google/gemini-2.5-pro-preview-03-25",
+    "google/gemini-2.5-flash-preview",
 ]
 DEFAULT_JUDGE_MODEL = "google/gemini-2.5-pro-preview-03-25"
 DEFAULT_NUM_SAMPLES = 10
