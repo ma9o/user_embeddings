@@ -198,81 +198,115 @@ def load_and_sample_data(
     return sample_df
 
 
+async def run_model_chain(
+    model_name: str,
+    test_instruction_prompts: List[str],
+    initial_input: str,
+) -> Tuple[str, List[str]]:
+    """Runs a model through a chain of prompts, returning the final output and intermediate outputs."""
+    current_input = initial_input
+    intermediate_outputs = []
+    final_output = "ERROR: No prompts provided"
+
+    for i, instruction_prompt in enumerate(test_instruction_prompts):
+        # Construct the prompt for the current step
+        # For the first step, use the initial input.
+        # For subsequent steps, use the output of the previous step.
+        step_input_content = current_input
+        model_prompt = (
+            f"{instruction_prompt}\n\nINPUT DATA:\n---\n{step_input_content}\n---"
+        )
+
+        try:
+            step_output = await run_model(model_name, model_prompt)
+            intermediate_outputs.append(step_output)
+            if step_output.startswith("ERROR:"):
+                print(
+                    f"Error in chain step {i + 1} for model {model_name}. Stopping chain."
+                )
+                final_output = step_output  # Propagate the error
+                break
+            current_input = step_output  # Output of this step is input for the next
+            final_output = step_output  # Update final output
+        except Exception as e:
+            error_msg = f"ERROR running chain step {i + 1} for model {model_name}: {e}"
+            print(error_msg)
+            intermediate_outputs.append(error_msg)
+            final_output = error_msg
+            break  # Stop chain on exception
+
+    return final_output, intermediate_outputs
+
+
 async def run_and_parse_test_models(
     sample_df: pl.DataFrame,
     models_to_test: List[str],
-    instruction_prompt: str,
+    test_instruction_prompts: List[str],
 ) -> List[Dict[str, Any]]:
-    """Runs test models concurrently and parses their outputs using the provided instruction prompt."""
+    """Runs test models concurrently through a chain of prompts and stores the final output."""
     test_model_tasks = []
     task_metadata = []
-    print("Preparing test model tasks...")
+    print("Preparing test model chain tasks...")
     for i, row in enumerate(sample_df.iter_rows(named=True)):
-        # Use the 'formatted_context' column
-        input_data = row["formatted_context"]
-        # Removed call to get_teacher_prompt
-        # instruction_prompt = get_teacher_prompt(input_context)
-
-        # Create the full prompt for the model
-        # (You might want to format this differently depending on prompt structure)
-        model_prompt = f"{instruction_prompt}\n\nINPUT DATA:\n---\n{input_data}\n---"
+        # Use the 'formatted_context' column as the initial input for the chain
+        initial_input_data = row["formatted_context"]
 
         for model in models_to_test:
-            # Pass the combined prompt to run_model
-            task = asyncio.create_task(run_model(model, model_prompt))
+            # Create a task to run the entire chain for this model and sample
+            task = asyncio.create_task(
+                run_model_chain(model, test_instruction_prompts, initial_input_data)
+            )
             test_model_tasks.append(task)
             task_metadata.append(
                 {
                     "sample_index": i,
                     "model": model,
-                    "input_data": input_data,  # Store input_data (which is formatted_context)
-                    # "instruction_prompt": instruction_prompt, # No need to store static prompt here
+                    "initial_input_data": initial_input_data,  # Store original input
                 }
             )
 
-    print(f"Running {len(test_model_tasks)} test model tasks concurrently...")
-    test_model_results_raw = await tqdm_asyncio.gather(
-        *test_model_tasks, desc="Running Test Models", unit="task"
+    print(f"Running {len(test_model_tasks)} test model chain tasks concurrently...")
+    # Results will be tuples: (final_output, intermediate_outputs_list)
+    test_model_results_chained = await tqdm_asyncio.gather(
+        *test_model_tasks, desc="Running Test Model Chains", unit="task"
     )
 
-    print("Organizing and parsing test results...")
+    print("Organizing and parsing final test results...")
     sample_intermediate_results: List[Dict[str, Any]] = [
         {} for _ in range(len(sample_df))
     ]
-    for i, raw_output in enumerate(test_model_results_raw):
+    for i, (final_output, intermediate_outputs) in enumerate(
+        test_model_results_chained
+    ):
         meta = task_metadata[i]
         sample_index = meta["sample_index"]
         model = meta["model"]
 
         if not sample_intermediate_results[sample_index]:
             sample_intermediate_results[sample_index] = {
-                "input_data": meta["input_data"],
-                # Store instruction_prompt at sample level if needed later (e.g., for judge)
-                # "instruction_prompt": instruction_prompt,
+                "input_data": meta["initial_input_data"],  # Original input for judge
                 "raw_outputs": {},
-                "parsed_outputs": {},
+                "parsed_outputs": {},  # Will store the FINAL output of the chain
+                "intermediate_outputs": {},  # Store intermediate steps if needed
             }
 
-        sample_intermediate_results[sample_index]["raw_outputs"][model] = raw_output
+        # Store the final raw output (which is the primary output for evaluation)
+        sample_intermediate_results[sample_index]["raw_outputs"][model] = final_output
+        # Store intermediate steps for potential debugging/analysis
+        sample_intermediate_results[sample_index]["intermediate_outputs"][model] = (
+            intermediate_outputs
+        )
 
-        # Placeholder parsing - replace with actual logic if needed
-        if raw_output.startswith("ERROR:"):
-            parsed_output_str = raw_output
+        # Placeholder parsing for the FINAL output - adjust if specific parsing is needed
+        if final_output.startswith("ERROR:"):
+            parsed_output_str = final_output
         else:
-            # Removed call to parse_teacher_prompt_output
-            # try:
-            #     parsed_output = parse_teacher_prompt_output(raw_output)
-            #     parsed_output_str = str(parsed_output)
-            # except Exception as parse_error:
-            #     print(
-            #         f"Error parsing output from {model} for sample {sample_index}: {parse_error}"
-            #     )
-            #     parsed_output_str = f"ERROR PARSING OUTPUT: {parse_error}\\nRAW OUTPUT:\\n{raw_output}"
+            # Simple placeholder: just use the raw final output as parsed for now
+            # You might want to implement JSON parsing or regex here based on the expected
+            # format of the *final* step in the chain.
+            parsed_output_str = final_output.strip()
 
-            # Simple placeholder: just use the raw output as parsed for now
-            # You might want to implement JSON parsing or regex here based on expected output format
-            parsed_output_str = raw_output.strip()
-
+        # Store the parsed FINAL output of the chain, which the judge will evaluate
         sample_intermediate_results[sample_index]["parsed_outputs"][model] = (
             parsed_output_str
         )
@@ -340,11 +374,16 @@ def aggregate_results(
     judge_response_map: Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]],
     models_to_test: List[str],
     effective_seed: int,
-    prompt_module_name: str,
+    test_prompt_module_names: List[str],
+    judge_prompt_module_name: str,
 ) -> List[Dict[str, Any]]:
-    """Aggregates results including inputs, outputs, ranks (translated), rationale (unmasked), correctness, seed, and prompt name."""
+    """Aggregates results including inputs, outputs, ranks, rationale, correctness, seed, and prompt names."""
     print("Processing judge results and aggregating final data...")
     results_data = []
+
+    test_prompts_str = " -> ".join(
+        test_prompt_module_names
+    )  # Create string representation of the chain
 
     for i, intermediate_data in enumerate(sample_intermediate_results):
         judge_data = judge_response_map.get(i)
@@ -421,7 +460,9 @@ def aggregate_results(
             ),
             "judge_any_correct": any_correct if any_correct is not None else "ERROR",
             "seed": effective_seed,
-            "prompt_name": prompt_module_name,
+            # Store the judge prompt name and the test prompt chain string
+            "judge_prompt_name": judge_prompt_module_name,
+            "test_prompt_chain": test_prompts_str,
         }
 
         rank_map = {}
@@ -465,6 +506,10 @@ def aggregate_results(
                 "parsed_outputs", {}
             ).get(model, "N/A")
             result_row[f"rank_{model}"] = rank_map.get(model, -1)
+            # Optionally add intermediate outputs to the row
+            result_row[f"intermediate_outputs_{model}"] = str(
+                intermediate_data.get("intermediate_outputs", {}).get(model, [])
+            )  # Convert list to string for CSV
 
         results_data.append(result_row)
 

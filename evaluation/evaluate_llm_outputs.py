@@ -62,14 +62,20 @@ DEFAULT_SEED = None
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(
-    description="Evaluate LLM outputs based on a specific prompt."
+    description="Evaluate LLM outputs based on a specific prompt or chain of prompts."
 )
 parser.add_argument(
-    "--prompt-module",
+    "--test-prompt-modules",
     type=str,
+    nargs="+",  # Accept multiple prompt modules
     required=True,
-    # Update help text to reflect available keys
-    help=f"Name of the prompt configuration to use. Available: {list(AVAILABLE_PROMPTS.keys())}",
+    help=f"Names of the prompt configurations for the test models (executed sequentially). Available: {list(AVAILABLE_PROMPTS.keys())}",
+)
+parser.add_argument(
+    "--judge-prompt-module",
+    type=str,
+    default=None,
+    help=f"Name of the prompt configuration for the judge model. If not provided and only one test prompt is given, uses the test prompt. Available: {list(AVAILABLE_PROMPTS.keys())}",
 )
 parser.add_argument(
     "--input-data-file",
@@ -198,17 +204,43 @@ async def main():
     # Ensure output directory exists
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Get Instruction Prompt from mapping ---
-    prompt_module_name = args.prompt_module
-    if prompt_module_name not in AVAILABLE_PROMPTS:
+    # --- Get Instruction Prompts from mapping ---
+    test_prompt_module_names = args.test_prompt_modules
+    # Determine judge prompt module name
+    if args.judge_prompt_module:
+        judge_prompt_module_name = args.judge_prompt_module
+    elif len(test_prompt_module_names) == 1:
+        judge_prompt_module_name = test_prompt_module_names[0]
         print(
-            f"Error: Prompt module '{prompt_module_name}' not found. "
+            f"Judge prompt not specified, defaulting to single test prompt: '{judge_prompt_module_name}'"
+        )
+    else:
+        print(
+            "Error: --judge-prompt-module is required when using multiple test prompts."
+        )
+        return  # Exit if judge prompt is needed but not provided
+
+    # Validate test prompt modules
+    test_instruction_prompts = []
+    for name in test_prompt_module_names:
+        if name not in AVAILABLE_PROMPTS:
+            print(
+                f"Error: Test prompt module '{name}' not found. "
+                f"Available prompts: {list(AVAILABLE_PROMPTS.keys())}"
+            )
+            return
+        test_instruction_prompts.append(AVAILABLE_PROMPTS[name])
+    print(f"Using test prompt chain: {' -> '.join(test_prompt_module_names)}")
+
+    # Validate judge prompt module (name is now guaranteed to be set if required)
+    if judge_prompt_module_name not in AVAILABLE_PROMPTS:
+        print(
+            f"Error: Judge prompt module '{judge_prompt_module_name}' not found. "
             f"Available prompts: {list(AVAILABLE_PROMPTS.keys())}"
         )
         return
-
-    instruction_prompt = AVAILABLE_PROMPTS[prompt_module_name]
-    print(f"Using instruction prompt: '{prompt_module_name}'")
+    judge_instruction_prompt = AVAILABLE_PROMPTS[judge_prompt_module_name]
+    print(f"Using judge prompt: '{judge_prompt_module_name}'")
 
     c = initialize_openrouter_client()
 
@@ -238,10 +270,9 @@ async def main():
         )
         print(f"Sampling from CSV files in directory: {input_source_path}")
 
-    # Construct output filename with prompt name, input data name/source, and seed
-    output_filename = (
-        f"llm_eval_{prompt_module_name}_{input_data_stem}_seed_{effective_seed}.csv"
-    )
+    # Construct output filename with prompt names, input data name/source, and seed
+    test_prompts_str = "-".join(test_prompt_module_names)
+    output_filename = f"llm_eval_judge-{judge_prompt_module_name}_chain-{test_prompts_str}_{input_data_stem}_seed_{effective_seed}.csv"
     output_file_path = args.output_dir / output_filename
 
     # Modify load_and_sample_data call to use the determined source path
@@ -254,29 +285,30 @@ async def main():
         return  # Exit if no data
 
     # 2. Run Test Models and Parse Outputs
-    # Pass instruction_prompt to the helper function
+    # Pass the list of test instruction prompts
     sample_intermediate_results = await run_and_parse_test_models(
         sample_df,
         args.models,
-        instruction_prompt,  # Pass instruction_prompt
+        test_instruction_prompts,  # Pass the list of prompts
     )
 
     # 3. Run Judge Model Evaluation
-    # Pass instruction_prompt to the helper function
+    # Pass the single judge instruction prompt
     judge_response_map = await run_judge_evaluation(
         sample_intermediate_results,
         args.judge_model,
-        instruction_prompt,  # Pass instruction_prompt
+        judge_instruction_prompt,  # Pass the judge prompt
     )
 
     # 4. Aggregate Final Results
-    # Pass necessary args like seed, prompt name etc. if needed by the helper
+    # Pass necessary args like seed, prompt names etc. if needed by the helper
     results_data = aggregate_results(
         sample_intermediate_results,
         judge_response_map,
         args.models,
         effective_seed,
-        prompt_module_name,
+        test_prompt_module_names,  # Pass list of test prompt names
+        judge_prompt_module_name,  # Pass judge prompt name
     )
     results_df = pl.DataFrame(results_data)
 
