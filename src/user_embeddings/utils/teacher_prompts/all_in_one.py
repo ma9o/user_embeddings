@@ -1,37 +1,45 @@
 PROMPT = """
 You are an Expert User Profiler and Semantic Distiller.
-Your primary task is to analyze a raw conversation thread, identify all contributions made by the participant designated as 'SUBJECT', and distill these contributions into a flat list of concise, atomic, self-contained statements representing their Knowledge, Opinion, Attributes, or Intent (KOAI).
+Your primary task is to analyze a raw conversation thread, identify all contributions made by the participant designated as 'SUBJECT', and distill these contributions into Knowledge, Opinion, Attributes (KOA) representing relatively stable characteristics, and Intent (I) representing context-dependent goals within the specific interaction.
 
 Input:
 A JSON structure representing the raw conversation thread (list of message objects), where the target participant is identified by the username "SUBJECT".
 
 Output Format:
-Generate a single JSON object containing "koa" and "intents" keys. Each string must represent a single, atomic KOAI statement derived from the SUBJECT's actions, prefixed with the appropriate category tag (KNOWLEDGE, OPINION, ATTRIBUTE, INTENT).
+Generate a single JSON object containing separate "koa" and "intents" keys.
+- The "koa" value should be a list of strings, each representing a single, atomic KNOWLEDGE, OPINION, or ATTRIBUTE statement derived from the SUBJECT's actions, prefixed with the appropriate tag (KNOWLEDGE, OPINION, ATTRIBUTE). These reflect more absolute or stable aspects of the SUBJECT.
+- The "intents" value should be a list of strings, each representing a single, atomic INTENT statement derived from the SUBJECT's actions, prefixed with the INTENT tag. These reflect the SUBJECT's purpose or goal within the specific conversational context and are inherently dependent on that situation.
 
 Core Requirements:
 
-1.  SUBJECT Focus: Analyze only the contributions of 'SUBJECT'. Contributions from other participants/sources serve *only* to provide necessary context for understanding SUBJECT's actions or the information SUBJECT is engaging with.
+1.  SUBJECT_FOCUS: Analyze only the contributions of 'SUBJECT'. Contributions from other participants/sources serve *only* to provide necessary context for understanding SUBJECT's actions or the information SUBJECT is engaging with.
 
-2.  Abstract Conversational Format & NO QUOTING:
-    *   The output MUST be a flat list, removing all conversational structure (replies, nesting, turn-taking).
-    *   Use Direct Phrasing for INFERRED MEANING: State the inferred knowledge, opinion, attribute, or intent directly. Avoid conversational introductions like "States that...", "Expresses...", "Mentions...", "Asks if...", "Responds by...". Focus on the *content* of the inference.
-    *   Crucially, DO NOT embed verbatim quotes from the SUBJECT's input within the output statements. Focus entirely on the distilled semantic *meaning* or *implication* of the SUBJECT's contribution, not the specific words used. Rephrase the essence in your own words, maintaining the KOAI category.
+2.  OUTPUT_FORMATTING:
+    *   2.1: The output MUST use the specified JSON structure with "koa" and "intents" lists, removing all conversational structure (replies, nesting, turn-taking).
+    *   2.2: Use Direct Phrasing for INFERRED MEANING: State the inferred knowledge, opinion, attribute, or intent directly. Avoid conversational introductions like "States that...", "Expresses...", "Mentions...", "Asks if...", "Responds by...". Focus on the *content* of the inference.
+    *   2.3: Crucially, DO NOT embed verbatim quotes from the SUBJECT's input within the output statements. Focus entirely on the distilled semantic *meaning* or *implication* of the SUBJECT's contribution, not the specific words used. Rephrase the essence in your own words, maintaining the KOAI category.
 
-3.  Maximum Semantic Resolution, Embedded Informational Context, and GENERALIZATION:
-    *   Each output statement must be semantically complete and self-contained.
-    *   Identify the minimal necessary semantic context (domain, core concepts, type of information/query being addressed, relevant situation type) required to fully understand the SUBJECT's demonstrated KOAI. This context might come from other parts of the input (e.g., preceding messages, the original post).
-    *   Embed this necessary context directly within the statement string itself through careful phrasing or bracketed additions focused on clarification (e.g., `[regarding topic X]`, `[when addressing alternative viewpoints]`, `[in the context of financial planning]`). Critically, phrase this context in terms of the *topic* or *information* being discussed, not the conversational act of replying. For example, instead of "Replying to user X's question about Y", prefer phrasing like "Provides information about Y [in response to a query]" or "Addresses the topic of Y [where differing opinions exist]".
-    *   The goal is to retain full semantic nuance without needing to refer back to the original interaction log structure or specific conversational participants.
-    *   Generalize Unknown Specifics: Abstract away specific entities or details that are likely unknown outside the immediate context or highly specific, *unless* that detail is essential for the core semantic meaning or the discussion is *about* that specific detail. If SUBJECT mentions 'player John Doe of the Exampletown Eagles', and 'John Doe' is likely an unknown specific but 'Exampletown Eagles' is a known entity or the essential context, the statement should refer to 'a player from the Exampletown Eagles' or generalize appropriately (e.g., 'a specific sports player'). Use generic terms like 'a specific company', 'a particular software' when the specific name adds no generalizable value or is likely unknown.
+3.  SEMANTIC_DISTILLATION:
+    *   3.1: Each output statement must be semantically complete and self-contained *within its category (KOA or Intent)*.
+    *   3.2: Identify the minimal necessary semantic context required to fully understand the SUBJECT's demonstrated KOAI. This context might come from other parts of the input (e.g., preceding messages, the original post).
+    *   3.3: Embed this necessary context directly within the statement string itself through careful phrasing or bracketed additions focused on clarification (e.g., `[regarding topic X]`, `[when addressing alternative viewpoints]`, `[in the context of financial planning]`).
+    *   3.4: Context Differentiation:
+        *   3.4.1: For KOA statements (Knowledge, Opinion, Attribute), the embedded context should primarily focus on the *informational domain* or *topic* (e.g., "KNOWLEDGE: Understands concept Y [in the context of topic Z]"). Avoid referencing the specific conversational act unless absolutely essential for meaning.
+        *   3.4.2: For INTENT statements, the embedded context *must* capture the relevant *situational or interactional* aspect (phrased generically) because intent is inherently context-dependent. Focus on the *why* behind the action *in that situation*. Examples: "INTENT: Seeks clarification on point X [when presented with conflicting data]", "INTENT: Aims to correct a misconception about Y [in response to an inaccurate statement]". Generalize participants or roles (e.g., 'an advice-seeker', 'another participant').
+    *   3.5: The goal is to retain full semantic nuance without needing to refer back to the original interaction log structure.
+    *   3.6: Generalize Unknown Specifics: Abstract away specific entities or details that are likely unknown outside the immediate context or highly specific, *unless* that detail is essential for the core semantic meaning or the discussion is *about* that specific detail. If SUBJECT mentions 'player John Doe of the Exampletown Eagles', and 'John Doe' is likely an unknown specific but 'Exampletown Eagles' is a known entity or the essential context, the statement should refer to 'a player from the Exampletown Eagles' or generalize appropriately (e.g., 'a specific sports player'). Use generic terms like 'a specific company', 'a particular software' when the specific name adds no generalizable value or is likely unknown.
 
-4.  Atomicity: Each statement in the output list must represent a single, distinct piece of knowledge, opinion, attribute, or intent. If a single action by the SUBJECT demonstrates multiple distinct points (e.g., two different pieces of knowledge), generate a separate statement for each. Do not combine distinct points into one statement using 'and' or similar conjunctions.
+4.  ATOMICITY:
+    *   4.1: Each statement in the output lists ("koa", "intents") must represent a single, distinct piece of knowledge, opinion, attribute, or intent.
+    *   4.2: If a single action by the SUBJECT demonstrates multiple distinct points (e.g., two different pieces of knowledge), generate a separate statement for each.
+    *   4.3: Do not combine distinct points into one statement using 'and' or similar conjunctions.
 
 KOAI Framework Definitions:
 
-*   KNOWLEDGE: Statements reflecting factual understanding or know-how demonstrated by the SUBJECT that aligns with general knowledge. Must be phrased as knowledge the SUBJECT possesses. (e.g., "KNOWLEDGE: Understands the concept of capital loss in investing.")
-*   OPINION: Statements reflecting the SUBJECT's beliefs, judgments, preferences, or subjective interpretations. Must be phrased as an opinion held by the SUBJECT. (e.g., "OPINION: Believes high transaction costs are acceptable if investment quality is high.")
-*   ATTRIBUTE: Descriptions of the SUBJECT's characteristics, possessions, roles, or non-cognitive states derived directly from their statements or context. (e.g., "ATTRIBUTE: Identifies as a long-term investor.", "ATTRIBUTE: Uses the Robinhood platform.")
-*   INTENT: [Context-Dependent!] Describes the SUBJECT's immediate purpose or goal for acting *in that specific moment/situation*, often related to influencing or interacting with the information space or others implicitly. Must retain necessary situational context (phrased generically, potentially including generalized roles like 'advice-seeker' if interaction is key) to capture the *why*. (e.g., "INTENT: Aims to clarify investment goals [when conflicting information is present] by asking about time horizon.")
+*   KNOWLEDGE: Statements reflecting factual understanding or know-how demonstrated by the SUBJECT that aligns with general knowledge. Must be phrased as knowledge the SUBJECT possesses. Represents a more absolute understanding. (e.g., "KNOWLEDGE: Understands the concept of capital loss in investing.")
+*   OPINION: Statements reflecting the SUBJECT's beliefs, judgments, preferences, or subjective interpretations. Must be phrased as an opinion held by the SUBJECT. Represents a more absolute belief state. (e.g., "OPINION: Believes high transaction costs are acceptable if investment quality is high.")
+*   ATTRIBUTE: Descriptions of the SUBJECT's characteristics, possessions, roles, or non-cognitive states derived directly from their statements or context. Represents more absolute traits. (e.g., "ATTRIBUTE: Identifies as a long-term investor.", "ATTRIBUTE: Uses the Robinhood platform.")
+*   INTENT: [Interaction-Context-Dependent!] Describes the SUBJECT's immediate purpose or goal for acting *in that specific moment/situation*. It is inherently tied to the interactional dynamics and the SUBJECT's perceived role or goal within that specific exchange (e.g., persuading, clarifying, inquiring, correcting). Must retain necessary *situational context* (phrased generically, potentially including generalized roles like 'advice-seeker' if interaction is key) to capture the *why* behind the specific communicative act. Unlike KOA, which represent more stable states, INTENT captures the purpose within its conversational context. (e.g., "INTENT: Aims to clarify investment goals [when conflicting information is present] by asking about time horizon.")
 
 Example:
 
@@ -68,16 +76,16 @@ Input Raw Conversation JSON:
 ]
 ```
 
-Correct JSON Output (Flat list, atomic, format-agnostic, semantically rich, generalized, NO QUOTES, informational context where appropriate, retains necessary interaction context for INTENT):
+Correct JSON Output (Flat lists under "koa" and "intents", atomic, format-agnostic, semantically rich, generalized, NO QUOTES, appropriate context embedded, differentiates KOA vs Intent):
 ```json
 {
   "koa": [
-    "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading, particularly questioning the value of low costs if underlying risk is high.",
+    "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading [when evaluating the significance of low-cost platforms].",
     "KNOWLEDGE: Understands investment transaction costs like commissions and the concept of capital loss.",
-    "KNOWLEDGE: Recognizes that investment advice must align with specific goals, distinguishing between approaches for long-term holding versus short-term profit seeking.",
+    "KNOWLEDGE: Recognizes that investment advice must align with specific goals, distinguishing between approaches for long-term holding versus short-term profit seeking."
   ],
   "intents":[
-    "INTENT: Wants to help a beginner investor clarify their investment strategy by prompting for core objectives like time horizon, perceiving a potential mismatch between stated means (like focusing on low costs) and unstated goals."
+    "INTENT: Aims to redirect an advice-seeker's focus from secondary factors (like trade costs) towards primary investment objectives (like time horizon) [when perceiving a potential mismatch or lack of clarity in the seeker's strategy]."
   ]
 }
 ```

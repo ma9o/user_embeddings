@@ -1,11 +1,10 @@
 import asyncio
-import json
-import re
 from typing import Any, Callable, Dict, List, Optional, TypedDict
 
 import polars as pl
-from json_repair import repair_json
 from tqdm.asyncio import tqdm_asyncio
+
+from user_embeddings.utils.parsing import parse_llm_json_output
 
 # Assuming get_text_completion is available via relative import or PYTHONPATH
 # Adjust the import path based on your project structure if necessary
@@ -156,22 +155,22 @@ async def execute_workflow(
     input_formatters: Dict[str, Callable[[Dict[str, str]], str]],
 ) -> Dict[str, Any]:
     """Executes a defined workflow for a single model and initial input.
-    If the final stage involves multiple parallel prompts that all successfully
-    return valid JSON, their outputs will be automatically parsed and merged
-    into a single dictionary stored under the key '_final_merged_output'.
+    If the final stage returns JSON, its output(s) will be parsed using
+    `parse_llm_json_output`. If multiple tasks return valid dicts, they are merged.
+    The resulting dict is stored under the key '_final_merged_output'.
 
     Args:
         model_name: The name of the LLM to use.
         initial_input: The starting input data for the first stage.
         workflow: List of stage definitions.
-        available_prompts: A dictionary mapping prompt module names to actual prompt text.
-        input_formatters: A dictionary mapping formatter names to callable functions.
+        available_prompts: Mapping of prompt module names to prompt text.
+        input_formatters: Mapping of formatter names to callable functions.
 
     Returns:
         A dictionary containing:
-            - Mappings from prompt_module_name (task_id) to its raw string output.
-            - Optionally, the key '_final_merged_output' mapping to a dictionary
-              if automatic merging of the final stage's JSON outputs was successful.
+            - Mappings from task_id to its raw string output.
+            - Optionally, '_final_merged_output' mapping to a parsed dictionary
+              if the final stage output(s) could be successfully parsed/merged.
     """
     intermediate_results: Dict[str, Any] = {}
     current_stage_input = initial_input
@@ -318,63 +317,34 @@ async def execute_workflow(
                     f"Task '{task_id}' in stage {stage_num} failed for model {model_name}."
                 )
 
-    # --- Post-Workflow: Attempt Final Stage JSON Merging ---
+    # --- Post-Workflow: Attempt Final Stage JSON Parsing/Merging using Utility ---
     if sorted_workflow:  # Check if workflow is not empty
         final_stage_def = sorted_workflow[-1]
         final_stage_task_ids = final_stage_def["prompts"]
 
-        if len(final_stage_task_ids) > 1:
+        if len(final_stage_task_ids) == 1:
+            # Attempt to parse single final output
+            task_id = final_stage_task_ids[0]
+            raw_output = intermediate_results.get(task_id)
+            parsed_dict = parse_llm_json_output(raw_output, expect_type=dict)
+            if parsed_dict is not None:
+                intermediate_results[FINAL_MERGED_OUTPUT_KEY] = parsed_dict
+
+        elif len(final_stage_task_ids) > 1:
+            # Attempt to merge multiple final outputs
             merged_data = {}
             can_merge = True
-            parse_errors = []
-
             for task_id in final_stage_task_ids:
                 raw_output = intermediate_results.get(task_id)
-                if not isinstance(raw_output, str) or raw_output.startswith("ERROR:"):
+                parsed_dict = parse_llm_json_output(raw_output, expect_type=dict)
+                if parsed_dict is not None:
+                    merged_data.update(parsed_dict)
+                else:
                     can_merge = False
-                    parse_errors.append(
-                        f"Task '{task_id}': Output missing or is error."
-                    )
-                    break  # Cannot merge if any task failed
-
-                # Attempt to parse JSON from the output string
-                try:
-                    # Basic JSON block extraction (like in judge parsing)
-                    match = re.search(
-                        r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw_output, re.DOTALL
-                    )
-                    if match:
-                        json_str = match.group(1)
-                    else:
-                        # Try repairing if no markdown block found
-                        json_str = repair_json(raw_output.strip())
-
-                    # Attempt to parse the cleaned/repaired string
-                    parsed_dict = json.loads(json_str)
-
-                    if isinstance(parsed_dict, dict):
-                        merged_data.update(parsed_dict)  # Merge the dictionaries
-                    else:
-                        can_merge = False
-                        parse_errors.append(
-                            f"Task '{task_id}': Parsed JSON is not a dictionary."
-                        )
-                        break
-
-                except (json.JSONDecodeError, TypeError) as e:
-                    can_merge = False
-                    parse_errors.append(
-                        f"Task '{task_id}': JSON parsing failed - {e}. Raw: {raw_output[:50]}..."
-                    )
-                    # Optionally try repair_json here as well if initial parse fails
-                    break
+                    break  # Stop merging if one fails
 
             if can_merge:
                 intermediate_results[FINAL_MERGED_OUTPUT_KEY] = merged_data
-            else:
-                # Optionally store the errors?
-                # intermediate_results[FINAL_MERGED_OUTPUT_KEY] = {"error": "Merge failed", "details": parse_errors}
-                pass  # Add pass to fix empty else block
 
     # Return all results (including potentially merged final output)
     return intermediate_results

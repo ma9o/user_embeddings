@@ -7,15 +7,14 @@ from user_embeddings.utils.llm.workflow_executor import PromptStage
 # Import teacher prompts - needed for AVAILABLE_PROMPTS and WORKFLOWS
 from user_embeddings.utils.teacher_prompts import (
     all_in_one,
-    inference,
     intent_only,
     koa_only,
-    separation,
 )
 
 # Import Pydantic models for AVAILABLE_OUTPUT_MODELS
 from user_embeddings.utils.teacher_prompts import intent_only as intent_only_module
 from user_embeddings.utils.teacher_prompts import koa_only as koa_only_module
+from user_embeddings.utils.teacher_prompts.deprecated import inference, separation
 
 # --- Shared Prompt Mapping ---
 # Used by both llm_rank_benchmark and prompt_adherence

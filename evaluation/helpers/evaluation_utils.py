@@ -1,12 +1,10 @@
 import asyncio
 import json
 import random
-import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import polars as pl
-from json_repair import repair_json
 from pydantic import BaseModel, ValidationError
 from tqdm.asyncio import tqdm_asyncio
 
@@ -16,6 +14,9 @@ from user_embeddings.utils.llm.workflow_executor import (
     _run_single_prompt,
     run_workflow_on_samples,
 )
+
+# Import utility
+from user_embeddings.utils.parsing import parse_llm_json_output
 
 
 # ... (create_judge_prompt, parse_judge_output, load_and_sample_data are unchanged) ...
@@ -61,35 +62,36 @@ def create_judge_prompt(
 def parse_judge_output(
     judge_response: str,
 ) -> Tuple[Optional[List[str]], Optional[str], Optional[bool]]:
-    # ...
-    try:
-        match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", judge_response, re.DOTALL)
-        if match:
-            json_str = match.group(1)
-        else:
-            json_str = judge_response.strip()
-        parsed_json = json.loads(json_str)
-        if not isinstance(parsed_json, dict):
-            print(f"Error: Judge output is not a JSON object: {parsed_json}")
-            return None, None, None
-        ranking = parsed_json.get("ranking")
-        rationale = parsed_json.get("rationale")
-        any_correct = parsed_json.get("any_correct")
-        if not isinstance(ranking, list) or not all(
-            isinstance(item, str) for item in ranking
-        ):
-            print(f"Error: 'ranking' key is not a list of strings: {ranking}")
-            ranking = None
-        if not isinstance(rationale, str):
-            print(f"Error: 'rationale' key is not a string: {rationale}")
-            rationale = None
-        if not isinstance(any_correct, bool):
-            print(f"Error: 'any_correct' key is not a boolean: {any_correct}")
-            any_correct = None
-        return ranking, rationale, any_correct
-    except (json.JSONDecodeError, IndexError, TypeError) as e:
-        print(f"Error parsing judge output: {e}\nRaw output:\n{judge_response}")
+    """Parses the ranking judge's JSON response using the utility function."""
+    parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
+
+    if parsed_json is None:
+        print(f"Error parsing judge output. Raw output:\n{judge_response}")
         return None, None, None
+
+    # Extract fields with type checking
+    ranking = parsed_json.get("ranking")
+    rationale = parsed_json.get("rationale")
+    any_correct = parsed_json.get("any_correct")
+
+    # Validate types
+    if not isinstance(ranking, list) or not all(
+        isinstance(item, str) for item in ranking
+    ):
+        print(
+            f"Warning: Judge output 'ranking' key is not a list of strings: {ranking}"
+        )
+        ranking = None
+    if not isinstance(rationale, str):
+        print(f"Warning: Judge output 'rationale' key is not a string: {rationale}")
+        rationale = None
+    if not isinstance(any_correct, bool):
+        print(
+            f"Warning: Judge output 'any_correct' key is not a boolean: {any_correct}"
+        )
+        any_correct = None
+
+    return ranking, rationale, any_correct
 
 
 def load_and_sample_data(
@@ -176,6 +178,7 @@ async def run_and_parse_test_models(
     Runs test models using the workflow orchestrator.
     Extracts the final merged JSON output (if available from the executor)
     and prepares a string representation for the judge.
+    Optionally validates individual task outputs using Pydantic.
     """
     # Call the orchestrator from the utils module
     # It now potentially returns pre-merged final JSON output
@@ -220,9 +223,7 @@ async def run_and_parse_test_models(
                         merged_json_output, indent=2, ensure_ascii=False
                     )
                 except TypeError:
-                    parsed_final_output_str = (
-                        "ERROR: Failed to serialize merged JSON from executor"
-                    )
+                    parsed_final_output_str = "ERROR: Failed to serialize merged JSON"
                     # Keep the dict in final_merged_json even if serialization fails
 
             else:
@@ -275,35 +276,31 @@ async def run_and_parse_test_models(
             # Store the string representation (either serialized JSON or fallback join)
             parsed_sample_data["final_parsed_outputs"][model] = parsed_final_output_str
 
-            # --- Optional: Individual Task Validation (using Pydantic) ---
-            # We can still validate individual task outputs here if needed, even if merging is done upstream
-            # This code block is optional and depends on whether you need this validation
+            # --- Optional: Individual Task Validation (using Pydantic & Utility Parser) ---
             validated_individual_outputs = {}
             for task_id in final_stage_task_ids:
                 raw_output = workflow_result_dict.get(task_id)
                 output_model = available_output_models.get(task_id)
-                if (
-                    isinstance(raw_output, str)
-                    and not raw_output.startswith("ERROR:")
-                    and output_model
-                ):
-                    try:
-                        match = re.search(
-                            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
-                            raw_output,
-                            re.DOTALL,
-                        )
-                        json_str = (
-                            match.group(1) if match else repair_json(raw_output.strip())
-                        )
-                        parsed_data = output_model.model_validate_json(json_str)
-                        validated_individual_outputs[task_id] = parsed_data.model_dump()
-                        # Could store these validated outputs somewhere if needed, e.g.:
-                        # parsed_sample_data.setdefault("validated_task_outputs", {}).setdefault(model, {})[task_id] = validated_individual_outputs[task_id]
-                    except (ValidationError, json.JSONDecodeError, TypeError) as e:
-                        print(
-                            f"Warning: Pydantic validation failed for individual task '{task_id}', model '{model}': {e}. Output not used for validation store."
-                        )
+
+                if output_model:
+                    # Use the utility parser first
+                    parsed_dict = parse_llm_json_output(raw_output, expect_type=dict)
+
+                    if parsed_dict is not None:
+                        try:
+                            # Validate the already parsed dict with Pydantic
+                            # Note: model_validate expects a dict, not a JSON string
+                            validated_data = output_model.model_validate(parsed_dict)
+                            validated_individual_outputs[task_id] = (
+                                validated_data.model_dump()
+                            )
+                            # Store if needed...
+                        except ValidationError as ve:
+                            print(
+                                f"Warning: Pydantic validation failed for task '{task_id}', model '{model}': {ve}. Parsed dict: {parsed_dict}"
+                            )
+                    # else: Parsing itself failed, handled by parse_llm_json_output (prints warning/returns None)
+
             # End Optional Validation Block
 
         parsed_results.append(parsed_sample_data)
@@ -676,57 +673,30 @@ def create_constraint_judge_prompt(
 
 
 def parse_constraint_judge_output(judge_response: str) -> Optional[List[str]]:
-    """Parses the judge's response to extract the list of violated constraints."""
-    try:
-        # Enhanced extraction to handle potential markdown/plain JSON
-        match = re.search(
-            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", judge_response, re.DOTALL
-        )
-        if match:
-            json_str = match.group(1)
-        else:
-            # Assume it might be plain JSON
-            json_str = judge_response.strip()
-            # Basic check if it looks like a JSON object
-            if not json_str.startswith("{") or not json_str.endswith("}"):
-                print(
-                    f"Warning: Judge output doesn't look like JSON: {judge_response[:100]}..."
-                )
-                json_str = repair_json(
-                    judge_response
-                )  # Try repairing non-JSON like string
+    """Parses the constraint judge's response using the utility function."""
+    parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
 
-        # Repair JSON string before parsing
-        repaired_json_str = repair_json(json_str)
-
-        parsed_json = json.loads(repaired_json_str)
-
-        if not isinstance(parsed_json, dict):
-            print(f"Error: Repaired judge output is not a JSON object: {parsed_json}")
-            return None
-
-        violations = parsed_json.get("violated_constraints")
-
-        if violations is None:
-            print(
-                f"Error: 'violated_constraints' key missing in judge output: {parsed_json}"
-            )
-            return None
-
-        if not isinstance(violations, list) or not all(
-            isinstance(item, str) for item in violations
-        ):
-            print(
-                f"Error: 'violated_constraints' is not a list of strings: {violations}"
-            )
-            return None
-
-        return violations
-    except (json.JSONDecodeError, IndexError, TypeError, Exception) as e:
-        print(
-            f"Error parsing constraint judge output: {e}\nAttempted repaired JSON string:\n{repaired_json_str}\nRaw output:\n{judge_response}"
-        )
+    if parsed_json is None:
+        print(f"Error parsing constraint judge output. Raw output:\n{judge_response}")
         return None
+
+    violations = parsed_json.get("violated_constraints")
+
+    if violations is None:
+        print(
+            f"Warning: Constraint judge output missing 'violated_constraints' key: {parsed_json}"
+        )
+        return None  # Or return [] if missing key means no violations?
+
+    if not isinstance(violations, list) or not all(
+        isinstance(item, str) for item in violations
+    ):
+        print(
+            f"Warning: Constraint judge 'violated_constraints' is not a list of strings: {violations}"
+        )
+        return None  # Treat malformed list as error
+
+    return violations  # Return the list of strings (possibly empty)
 
 
 async def run_constraint_judge_evaluation(
