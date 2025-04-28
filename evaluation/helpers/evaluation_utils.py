@@ -654,49 +654,57 @@ def create_constraint_judge_prompt(
     prompt += f"MODEL OUTPUT TO EVALUATE:\n---\n{model_output}\n---\n\n"
     prompt += f"CONSTRAINTS TO CHECK:\n---\n{constraints_prompt}\n---\n\n"
     prompt += "TASK:\n1. Carefully review the MODEL OUTPUT.\n2. Compare it against the CONSTRAINTS TO CHECK, considering the INPUT DATA.\n3. Identify *all* constraints that the MODEL OUTPUT failed to meet.\n\n"
-    prompt += "OUTPUT FORMAT:\nProvide your evaluation as a JSON object containing a single key: 'violated_constraints'. The value should be a list of strings, where each string describes a specific constraint that was violated. If no constraints were violated, return an empty list.\n\n"
+    prompt += "OUTPUT FORMAT:\nProvide your evaluation as a JSON object where each key is a unique identifier string for the violated constraint and the value is a brief string explaining the violation.\n"
+    prompt += "The key MUST follow the format `CATEGORY.MainSection.SubSection` (e.g., `OUTPUT_FORMATTING.2.1`, `SEMANTIC_DISTILLATION.3.4`), referencing the corresponding section and subsection numbers from the 'CONSTRAINTS TO CHECK'. Use the ALL_CAPS category name and at most two numerical parts (e.g., `OUTPUT_FORMATTING.2` or `OUTPUT_FORMATTING.2.3` are valid, but `OUTPUT_FORMATTING.2.3.1` is NOT).\\n"
+    prompt += (
+        "If no constraints were violated, return an empty JSON object (`{}`).\\n\\n"
+    )
     prompt += "Example (Constraints violated):\n"
     prompt += (
-        "```json\n"
-        "{\n"
-        '  "violated_constraints": [\n'
-        '    "Constraint 1: Output did not start with a greeting.",\n'
-        '    "Constraint 3: Failed to mention the primary subject from the input."\n'
-        "  ]\n"
-        "}\n"
-        "```\n\n"
+        "```json\\n"
+        "{\\n"
+        # Using example IDs derived from all_in_one.py
+        '  "OUTPUT_FORMATTING.2.3": "Explain in detail where the violation happened.",\\n'
+        '  "ATOMICITY.4.1": "Explain in detail where the violation happened.",\\n'
+        '  "SEMANTIC_DISTILLATION.3.4.2": "Explain in detail where the violation happened."\\n'
+        "}\\n"
+        "```\\n\\n"
     )
     prompt += "Example (No constraints violated):\n"
-    prompt += '```json\n{\n  "violated_constraints": []\n}\n```\n\n'
+    prompt += "```json\\n{}\\n```\\n\\n"
     prompt += "Return ONLY the JSON object and nothing else."
     return prompt
 
 
-def parse_constraint_judge_output(judge_response: str) -> Optional[List[str]]:
-    """Parses the constraint judge's response using the utility function."""
+def parse_constraint_judge_output(judge_response: str) -> Optional[Dict[str, str]]:
+    """Parses the constraint judge's dictionary response using the utility function."""
     parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
 
     if parsed_json is None:
         print(f"Error parsing constraint judge output. Raw output:\n{judge_response}")
         return None
 
-    violations = parsed_json.get("violated_constraints")
+    # Validate the structure: Dict[str, str]
+    if not isinstance(parsed_json, dict):
+        # This check might be redundant if parse_llm_json_output already ensures dict
+        print(f"Warning: Constraint judge output is not a dictionary: {parsed_json}")
+        return None
 
-    if violations is None:
-        print(
-            f"Warning: Constraint judge output missing 'violated_constraints' key: {parsed_json}"
-        )
-        return None  # Or return [] if missing key means no violations?
+    violations_dict = {}
+    valid = True
+    for key, value in parsed_json.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            print(
+                f"Warning: Constraint judge dictionary contains non-string key or value: ({type(key)}) {key}: ({type(value)}) {value}"
+            )
+            valid = False
+            break  # Stop validation on first error
+        violations_dict[key] = value
 
-    if not isinstance(violations, list) or not all(
-        isinstance(item, str) for item in violations
-    ):
-        print(
-            f"Warning: Constraint judge 'violated_constraints' is not a list of strings: {violations}"
-        )
-        return None  # Treat malformed list as error
+    if not valid:
+        return None  # Treat malformed dictionary as error
 
-    return violations  # Return the list of strings (possibly empty)
+    return violations_dict  # Return the dictionary (possibly empty)
 
 
 async def run_constraint_judge_evaluation(
@@ -823,9 +831,9 @@ def aggregate_constraint_results(
 
         # Get judge response and parse it
         judge_raw_response = judge_response_map.get(i)
-        violated_constraints_list: Optional[List[str]] = None
+        violated_constraints_dict: Optional[Dict[str, str]] = None
         if judge_raw_response:
-            violated_constraints_list = parse_constraint_judge_output(
+            violated_constraints_dict = parse_constraint_judge_output(
                 judge_raw_response
             )
 
@@ -835,15 +843,15 @@ def aggregate_constraint_results(
             "judge_raw_output": judge_raw_response
             if judge_raw_response
             else "Judge Skipped/Failed",
-            # Store parsed violations as a JSON string or handle None/Error
-            "violated_constraints": json.dumps(violated_constraints_list)
-            if violated_constraints_list is not None
+            # Store parsed violations dict as a JSON string or handle None/Error
+            "violated_constraints": json.dumps(violated_constraints_dict)
+            if violated_constraints_dict is not None
             else "ERROR: Parse Failed"
             if judge_raw_response
             else "Judge Skipped/Failed",
-            "violation_count": len(violated_constraints_list)
-            if violated_constraints_list is not None
-            else -1,
+            "violation_count": len(violated_constraints_dict)
+            if violated_constraints_dict is not None
+            else -1,  # Count keys if dict exists, else -1
             "seed": effective_seed,
             "workflow_name": workflow_name,
             "model_evaluated": model_to_evaluate,

@@ -208,30 +208,75 @@ async def main():
         # Optional: Print top N most common violations if needed
         if "violated_constraints" in results_df.columns and num_samples_judged > 0:
             try:
-                all_violations = (
-                    results_df.filter(
-                        # Consider adding a more robust check for valid JSON strings here if needed
-                        pl.col("violated_constraints").str.starts_with("[")
-                    )
-                    .select(
-                        # Use the more efficient native JSON decoding expression
-                        pl.col("violated_constraints").str.json_decode()
-                    )
-                    .explode("violated_constraints")
+                # Filter for rows where violations were found and successfully parsed
+                violation_dicts_df = results_df.filter(
+                    (pl.col("violation_count") > 0)
+                    & (
+                        pl.col("violated_constraints").str.starts_with("{")
+                    )  # Check for dict start
+                ).select(
+                    pl.col("violated_constraints")
+                    .str.json_decode()  # Decode JSON string to struct
+                    .alias("violations_dict")
                 )
-                if not all_violations.is_empty():
+
+                # Check if the column is indeed a struct after decoding
+                if not isinstance(
+                    violation_dicts_df["violations_dict"].dtype, pl.Struct
+                ):
+                    print(
+                        "Warning: Column 'violations_dict' is not a Struct after JSON decoding. Skipping violation analysis."
+                    )
+                    all_violation_ids = pl.DataFrame(
+                        {"violation_id": []}, schema={"violation_id": pl.String}
+                    )  # Empty DF with correct schema
+                elif violation_dicts_df.is_empty():
+                    print("No rows with valid violation dictionaries found.")
+                    all_violation_ids = pl.DataFrame(
+                        {"violation_id": []}, schema={"violation_id": pl.String}
+                    )
+                else:
+                    # Extract keys (violation IDs) from each dictionary/struct using map_elements
+                    all_violation_ids = (
+                        violation_dicts_df.select(
+                            pl.col("violations_dict")
+                            # Apply lambda to get keys, handle potential non-dict elements gracefully
+                            .map_elements(
+                                lambda d: list(d.keys()) if isinstance(d, dict) else [],
+                                return_dtype=pl.List(pl.String),
+                            )
+                            .alias("violation_id_list")
+                        )
+                        .explode("violation_id_list")
+                        .rename({"violation_id_list": "violation_id"})
+                    )
+
+                # Proceed only if all_violation_ids DataFrame is not empty and has the column
+                if (
+                    not all_violation_ids.is_empty()
+                    and "violation_id" in all_violation_ids.columns
+                ):
                     violation_counts = (
-                        all_violations["violated_constraints"]
+                        all_violation_ids.filter(pl.col("violation_id").is_not_null())[
+                            "violation_id"
+                        ]  # Filter nulls just in case
                         .value_counts()
                         .sort("count", descending=True)
                     )
                     print("\nMost Common Violations:")
                     print(violation_counts.head(10))
                 else:
-                    print("No violations recorded in results.")
+                    # This case covers initial empty df, parsing failures, or empty key lists
+                    print(
+                        "No specific violation details could be extracted or parsed from results."
+                    )
 
             except Exception as e:
-                print(f"Could not analyze violation details: {e}")
+                # Add more specific error context if possible
+                print(f"Could not analyze violation details due to an error: {e}")
+                import traceback
+
+                traceback.print_exc()  # Print full traceback for debugging
 
     print(f"Constraint evaluation complete. Results saved to {output_file_path}")
 
