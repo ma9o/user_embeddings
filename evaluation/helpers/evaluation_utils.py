@@ -342,13 +342,13 @@ async def run_judge_evaluation(
     return judge_response_map
 
 
-def aggregate_results(
+def aggregate_ranking_results(
     sample_workflow_results: List[Dict[str, Any]],
     judge_response_map: Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]],
     models_to_test: List[str],
     effective_seed: int,
     workflow_name: str,
-    judge_prompt_module_name: str,
+    judge_prompt_name: str,
     workflow: List[Dict[str, Any]],
     debug: bool = False,  # Add debug flag
 ) -> List[Dict[str, Any]]:
@@ -442,7 +442,7 @@ def aggregate_results(
             "judge_any_correct": any_correct if any_correct is not None else "ERROR",
             "seed": effective_seed,
             "workflow_name": workflow_name,
-            "judge_prompt_name": judge_prompt_module_name,
+            "judge_prompt_name": judge_prompt_name,
         }
 
         # Calculate ranks (logic unchanged)
@@ -615,3 +615,242 @@ def calculate_and_print_leaderboard(
                 f"{i + 1}. {model:<40} Avg Rank = {rank_str:<6} ({num_valid:>3}/{bin_total_samples} ranked samples)"
             )
         print("-" * len(bin_header_line))
+
+
+# --- New functions for Constraint Violation Evaluation ---
+
+
+def create_constraint_judge_prompt(
+    constraints_prompt: str,  # Specific prompt detailing constraints
+    input_data: str,
+    model_output: str,
+) -> str:
+    """Creates a prompt for a judge model to identify constraint violations."""
+    prompt = "You are an expert evaluator tasked with identifying violations of specific constraints in a Large Language Model (LLM) output based on a given input, and a set of constraints.\n\n"
+    prompt += f"INPUT DATA GIVEN TO THE MODEL:\n---\n{input_data}\n---\n\n"
+    prompt += f"MODEL OUTPUT TO EVALUATE:\n---\n{model_output}\n---\n\n"
+    prompt += f"CONSTRAINTS TO CHECK:\n---\n{constraints_prompt}\n---\n\n"
+    prompt += "TASK:\n1. Carefully review the MODEL OUTPUT.\n2. Compare it against the CONSTRAINTS TO CHECK, considering the INPUT DATA.\n3. Identify *all* constraints that the MODEL OUTPUT failed to meet.\n\n"
+    prompt += "OUTPUT FORMAT:\nProvide your evaluation as a JSON object containing a single key: 'violated_constraints'. The value should be a list of strings, where each string describes a specific constraint that was violated. If no constraints were violated, return an empty list.\n\n"
+    prompt += "Example (Constraints violated):\n"
+    prompt += (
+        "```json\n"
+        "{\n"
+        '  "violated_constraints": [\n'
+        '    "Constraint 1: Output did not start with a greeting.",\n'
+        '    "Constraint 3: Failed to mention the primary subject from the input."\n'
+        "  ]\n"
+        "}\n"
+        "```\n\n"
+    )
+    prompt += "Example (No constraints violated):\n"
+    prompt += '```json\n{\n  "violated_constraints": []\n}\n```\n\n'
+    prompt += "Return ONLY the JSON object and nothing else."
+    return prompt
+
+
+def parse_constraint_judge_output(judge_response: str) -> Optional[List[str]]:
+    """Parses the judge's response to extract the list of violated constraints."""
+    try:
+        # Enhanced extraction to handle potential markdown/plain JSON
+        match = re.search(
+            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", judge_response, re.DOTALL
+        )
+        if match:
+            json_str = match.group(1)
+        else:
+            # Assume it might be plain JSON
+            json_str = judge_response.strip()
+            # Basic check if it looks like a JSON object
+            if not json_str.startswith("{") or not json_str.endswith("}"):
+                print(
+                    f"Warning: Judge output doesn't look like JSON: {judge_response[:100]}..."
+                )
+                json_str = repair_json(
+                    judge_response
+                )  # Try repairing non-JSON like string
+
+        # Repair JSON string before parsing
+        repaired_json_str = repair_json(json_str)
+
+        parsed_json = json.loads(repaired_json_str)
+
+        if not isinstance(parsed_json, dict):
+            print(f"Error: Repaired judge output is not a JSON object: {parsed_json}")
+            return None
+
+        violations = parsed_json.get("violated_constraints")
+
+        if violations is None:
+            print(
+                f"Error: 'violated_constraints' key missing in judge output: {parsed_json}"
+            )
+            return None
+
+        if not isinstance(violations, list) or not all(
+            isinstance(item, str) for item in violations
+        ):
+            print(
+                f"Error: 'violated_constraints' is not a list of strings: {violations}"
+            )
+            return None
+
+        return violations
+    except (json.JSONDecodeError, IndexError, TypeError, Exception) as e:
+        print(
+            f"Error parsing constraint judge output: {e}\nAttempted repaired JSON string:\n{repaired_json_str}\nRaw output:\n{judge_response}"
+        )
+        return None
+
+
+async def run_constraint_judge_evaluation(
+    sample_workflow_results: List[
+        Dict[str, Any]
+    ],  # Output from run_and_parse_test_models
+    model_to_evaluate: str,  # The single model being judged
+    judge_model: str,
+    judge_constraints_prompt: str,  # The prompt defining constraints
+) -> Dict[int, str]:  # Map sample index to raw judge response string
+    """Runs the constraint judge model for each sample."""
+    judge_tasks = []
+    judge_task_metadata = []  # Store sample index
+    print(f"Preparing constraint judge tasks for model '{model_to_evaluate}'...")
+
+    for i, sample_data in enumerate(sample_workflow_results):
+        # Get the FINAL PARSED output for the specific model being evaluated
+        model_final_output = sample_data.get("final_parsed_outputs", {}).get(
+            model_to_evaluate
+        )
+
+        if model_final_output is None or model_final_output.startswith("ERROR:"):
+            print(
+                f"Skipping constraint judge for sample {i}: Final output for model '{model_to_evaluate}' not found or is an error."
+            )
+            continue
+
+        # Create the specific prompt for the constraint judge
+        judge_prompt = create_constraint_judge_prompt(
+            constraints_prompt=judge_constraints_prompt,
+            input_data=sample_data["input_data"],
+            model_output=model_final_output,
+        )
+
+        task = asyncio.create_task(_run_single_prompt(judge_model, judge_prompt))
+        judge_tasks.append(task)
+        judge_task_metadata.append({"sample_index": i})
+
+    judge_responses_raw = []
+    if judge_tasks:
+        print(
+            f"Running {len(judge_tasks)} constraint judge tasks concurrently for model '{model_to_evaluate}'..."
+        )
+        judge_responses_raw = await tqdm_asyncio.gather(
+            *judge_tasks, desc=f"Running Constraint Judge ({judge_model})", unit="task"
+        )
+    else:
+        print("No constraint judge tasks to run.")
+
+    judge_response_map: Dict[int, str] = {}  # Map sample_index -> raw judge response
+    for i, raw_response in enumerate(judge_responses_raw):
+        meta = judge_task_metadata[i]
+        sample_index = meta["sample_index"]
+        judge_response_map[sample_index] = raw_response
+
+    return judge_response_map
+
+
+def aggregate_constraint_results(
+    sample_workflow_results: List[
+        Dict[str, Any]
+    ],  # Output from run_and_parse_test_models
+    judge_response_map: Dict[int, str],  # Output from run_constraint_judge_evaluation
+    model_to_evaluate: str,
+    effective_seed: int,
+    workflow_name: str,
+    judge_prompt_name: str,  # Renamed back
+    workflow: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Aggregates results for the constraint violation evaluation."""
+    print("Aggregating constraint evaluation results...")
+    results_data = []
+    final_stage_task_ids: List[str] = workflow[-1][
+        "prompts"
+    ]  # Needed to get original instruction prompt?
+
+    # Determine the instruction prompt used for the final stage (needed for context in results)
+    # This assumes the judge needs context about the *last* instruction given
+    # to the model being evaluated. If the constraints apply regardless of the final
+    # instruction, this might be simplified.
+    # For simplicity, if the final stage had multiple prompts, we might need
+    # a specific way to decide which instruction matters most for the constraint check,
+    # or combine them. Let's assume for now the judge prompt already contains sufficient context
+    # or we primarily care about the constraints themselves. We'll store the constraints prompt name.
+
+    for i, sample_data in enumerate(sample_workflow_results):
+        input_context = sample_data.get("input_data", "ERROR: Input not found")
+        input_length = len(input_context) if isinstance(input_context, str) else -1
+
+        # Get the final parsed output and merged JSON for the evaluated model
+        final_parsed_output = sample_data.get("final_parsed_outputs", {}).get(
+            model_to_evaluate, "N/A"
+        )
+        final_merged_json = sample_data.get("final_merged_json", {}).get(
+            model_to_evaluate, {}
+        )
+
+        # Get judge response and parse it
+        judge_raw_response = judge_response_map.get(i)
+        violated_constraints_list: Optional[List[str]] = None
+        if judge_raw_response:
+            violated_constraints_list = parse_constraint_judge_output(
+                judge_raw_response
+            )
+
+        result_row: Dict[str, Any] = {
+            "input": input_context,
+            "input_length": input_length,
+            f"final_parsed_output_{model_to_evaluate}": final_parsed_output,
+            "judge_raw_output": judge_raw_response
+            if judge_raw_response
+            else "Judge Skipped/Failed",
+            # Store parsed violations as a JSON string or handle None/Error
+            "violated_constraints": json.dumps(violated_constraints_list)
+            if violated_constraints_list is not None
+            else "ERROR: Parse Failed"
+            if judge_raw_response
+            else "Judge Skipped/Failed",
+            "violation_count": len(violated_constraints_list)
+            if violated_constraints_list is not None
+            else -1,
+            "seed": effective_seed,
+            "workflow_name": workflow_name,
+            "model_evaluated": model_to_evaluate,
+            "judge_prompt_name": judge_prompt_name,  # Renamed back
+        }
+
+        # Optionally, add intermediate task outputs for the evaluated model
+        model_outputs_all_tasks = sample_data.get("model_outputs", {}).get(
+            model_to_evaluate, {}
+        )
+        all_task_ids_in_workflow = set(
+            p for stage in workflow for p in stage["prompts"]
+        )
+        for task_id in all_task_ids_in_workflow:
+            col_name = f"output_{task_id}_{model_to_evaluate}"
+            result_row[col_name] = model_outputs_all_tasks.get(task_id, "N/A")
+
+        # Optionally, add specific fields from the final merged JSON
+        if isinstance(final_merged_json, dict):
+            for key, value in final_merged_json.items():
+                col_name = f"final_{key}_{model_to_evaluate}"
+                result_row[col_name] = (
+                    json.dumps(value) if isinstance(value, (list, dict)) else str(value)
+                )
+        else:
+            result_row[f"final_merged_json_error_{model_to_evaluate}"] = (
+                "ERROR: Merged JSON not available or not a dict"
+            )
+
+        results_data.append(result_row)
+
+    return results_data
