@@ -1,14 +1,14 @@
-import pytest
+import glob
+import os
+import sys
+import time
+from typing import Optional
+
 import dask.dataframe as dd
 import pandas as pd
-import os
-import glob
 import pyarrow as pa
 import pyarrow.parquet as pq
-import sys
-import traceback
-from typing import Optional
-import time
+import pytest
 
 # Ensure the utils directory is in the Python path for import
 # This assumes data_loading.py is in the tests/helpers/ directory
@@ -18,13 +18,13 @@ if workspace_root not in sys.path:
 
 # Import from utils AFTER potentially modifying sys.path
 try:
-    from user_embeddings.utils.zst_io import (
-        read_single_zst_ndjson_chunked,
+    from user_embeddings.utils.data_loading.zst_io import (
         DEFAULT_CHUNK_SIZE,
+        read_single_zst_ndjson_chunked,
     )
 except ImportError as e:
     print(
-        f"ERROR: Failed to import from user_embeddings.utils.zst_io. Check sys.path and file existence. Error: {e}"
+        f"ERROR: Failed to import from user_embeddings.utils.data_loading.zst_io. Check sys.path and file existence. Error: {e}"
     )
     # Optionally re-raise or handle appropriately
     raise

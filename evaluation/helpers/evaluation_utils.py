@@ -11,7 +11,7 @@ from pydantic import BaseModel, ValidationError
 from tqdm.asyncio import tqdm_asyncio
 
 # Import the NEW orchestrator and the single prompt runner
-from user_embeddings.utils.workflow_executor import (
+from user_embeddings.utils.llm.workflow_executor import (
     _run_single_prompt,
     run_workflow_on_samples,
 )

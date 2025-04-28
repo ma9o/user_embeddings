@@ -1,37 +1,35 @@
-import pytest
-import dask.dataframe as dd
-import pandas as pd
 import os
 
-# import random # No longer needed
-import glob  # Add glob import
-
-# import dask.bag as db # No longer needed for fixtures
-# import logging # Import logging -> No longer needed
-import pyarrow as pa  # Import pyarrow
+# Configure logging -> No longer needed
+# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Ensure the utils directory is in the Python path for import
+# This might be handled by pytest configuration or environment variables in a real setup
+import sys
 
 # No longer need pq here if helper handles writing
 # import pyarrow.parquet as pq # Import pyarrow.parquet
 import time  # Add time import
-from dask.distributed import Client, LocalCluster, progress
 from typing import List  # Add List import
 
-# Configure logging -> No longer needed
-# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+import dask.dataframe as dd
+import pandas as pd
 
-# Ensure the utils directory is in the Python path for import
-# This might be handled by pytest configuration or environment variables in a real setup
-import sys
+# import random # No longer needed
+# import dask.bag as db # No longer needed for fixtures
+# import logging # Import logging -> No longer needed
+import pyarrow as pa  # Import pyarrow
+import pytest
+from dask.distributed import Client, LocalCluster, progress
 
 workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if workspace_root not in sys.path:  # Ensure root is in path for src import
     sys.path.insert(0, workspace_root)
 
-from user_embeddings.utils.dask_processing import generate_user_context
+from user_embeddings.utils.data_loading.dask_processing import generate_user_context
+
 # No longer need zst_io imports here if helper handles reading/chunking
 # from utils.zst_io import read_single_zst_ndjson_chunked
 # from utils.zst_io import DEFAULT_CHUNK_SIZE
-
 # Import the helper function from its new location
 from .helpers.data_loading import load_or_create_cached_ddf
 
@@ -315,7 +313,7 @@ def test_generate_context_sample_user(
             test_users_to_process = _sample_test_users(comments_ddf, NUM_TEST_USERS)
             if not test_users_to_process:
                 pytest.skip(
-                    f"Could not find any non-deleted users in the sample. Skipping test."
+                    "Could not find any non-deleted users in the sample. Skipping test."
                 )
         except Exception as e:
             pytest.fail(f"Failed during user sampling: {e}")

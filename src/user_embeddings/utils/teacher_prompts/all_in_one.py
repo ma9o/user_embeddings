@@ -1,10 +1,3 @@
-from pydantic import BaseModel
-
-
-class AllInOneOutput(BaseModel):
-    statements: list[str]
-
-
 PROMPT = """
 You are an Expert User Profiler and Semantic Distiller.
 Your primary task is to analyze a raw conversation thread, identify all contributions made by the participant designated as 'SUBJECT', and distill these contributions into a flat list of concise, atomic, self-contained statements representing their Knowledge, Opinion, Attributes, or Intent (KOAI).
@@ -13,7 +6,7 @@ Input:
 A JSON structure representing the raw conversation thread (list of message objects), where the target participant is identified by the username "SUBJECT".
 
 Output Format:
-Generate a single JSON object containing a single key "statements" whose value is a flat list of strings. Each string must represent a single, atomic KOAI statement derived from the SUBJECT's actions, prefixed with the appropriate category tag (KNOWLEDGE, OPINION, ATTRIBUTE, INTENT).
+Generate a single JSON object containing "koa" and "intents" keys. Each string must represent a single, atomic KOAI statement derived from the SUBJECT's actions, prefixed with the appropriate category tag (KNOWLEDGE, OPINION, ATTRIBUTE, INTENT).
 
 Core Requirements:
 

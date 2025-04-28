@@ -18,7 +18,14 @@ from helpers.evaluation_utils import (
     save_results,
 )
 
-from user_embeddings.utils.get_text_completion import initialize_openrouter_client
+from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
+
+# Import workflow utilities
+from user_embeddings.utils.llm.workflow_executor import (
+    DEFAULT_INPUT_FORMATTERS,  # Import default formatters
+    PromptStage,  # Import type if needed, though WORKFLOWS uses it implicitly
+    validate_workflow,  # Import validator
+)
 
 # Import teacher prompts
 from user_embeddings.utils.teacher_prompts import (
@@ -32,13 +39,6 @@ from user_embeddings.utils.teacher_prompts import intent_only as intent_only_mod
 
 # Import Pydantic models for output validation
 from user_embeddings.utils.teacher_prompts import koa_only as koa_only_module
-
-# Import workflow utilities
-from user_embeddings.utils.workflow_executor import (
-    DEFAULT_INPUT_FORMATTERS,  # Import default formatters
-    PromptStage,  # Import type if needed, though WORKFLOWS uses it implicitly
-    validate_workflow,  # Import validator
-)
 
 load_dotenv()
 project_root = Path(__file__).resolve().parent.parent
