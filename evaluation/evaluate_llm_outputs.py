@@ -1,19 +1,13 @@
 import argparse
 import asyncio
-
-# import importlib.util # Removed
-import json
-
-# Keep sys.path modification for robustness when running script from different locations
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 
-# import sys # Keep sys if sys.path modification is kept
 import polars as pl
 from dotenv import load_dotenv
 
-# Import helper functions from the new module
+# Import helpers
 from helpers.evaluation_utils import (
     aggregate_results,
     calculate_and_print_leaderboard,
@@ -23,36 +17,81 @@ from helpers.evaluation_utils import (
     save_results,
 )
 
-from user_embeddings.utils.get_text_completion import (
-    get_text_completion,
-    initialize_openrouter_client,
-)
+from user_embeddings.utils.get_text_completion import initialize_openrouter_client
 
-# Import teacher prompts directly
+# Import teacher prompts
 from user_embeddings.utils.teacher_prompts import (
     all_in_one,
     inference,
+    intent_only,
+    koa_only,
     separation,
+)
+from user_embeddings.utils.teacher_prompts import intent_only as intent_only_module
+
+# Import Pydantic models for output validation
+from user_embeddings.utils.teacher_prompts import koa_only as koa_only_module
+
+# Import workflow utilities
+from user_embeddings.utils.workflow_executor import (
+    DEFAULT_INPUT_FORMATTERS,  # Import default formatters
+    PromptStage,  # Import type if needed, though WORKFLOWS uses it implicitly
+    validate_workflow,  # Import validator
 )
 
 load_dotenv()
-
 project_root = Path(__file__).resolve().parent.parent
 
-
 # --- Prompt Mapping ---
-# Assumes each prompt module has an INSTRUCTION_PROMPT variable
 AVAILABLE_PROMPTS = {
     "all_in_one": all_in_one.PROMPT,
     "inference": inference.PROMPT,
     "separation": separation.PROMPT,
+    "intent_only": intent_only.PROMPT,
+    "koa_only": koa_only.PROMPT,
+}
+
+# --- Pydantic Output Model Mapping --- Map prompt names to their validation models
+AVAILABLE_OUTPUT_MODELS = {
+    "koa_only": koa_only_module.PromptOutput,
+    "intent_only": intent_only_module.PromptOutput,
+    # Add other models here if defined
+    # "separation": separation_module.PromptOutput,
+    # "inference": inference_module.PromptOutput,
+    # "all_in_one": all_in_one_module.PromptOutput,
+}
+
+# --- Workflow Definition ---
+WORKFLOWS: Dict[str, List[PromptStage]] = {
+    "serial_separation_inference": [
+        {
+            "stage": 1,
+            "prompts": ["separation"],
+            "input_from": None,
+            "input_formatter": None,
+        },
+        {
+            "stage": 2,
+            "prompts": ["inference"],
+            "input_from": ["separation"],
+            "input_formatter": "format_single_input",
+        },
+    ],
+    "concurrent_intent_koa": [
+        {
+            "stage": 1,
+            "prompts": ["intent_only", "koa_only"],
+            "input_from": None,
+            "input_formatter": None,
+        },
+    ],
 }
 
 # --- Default Configuration ---
 DEFAULT_MODELS_TO_TEST = [
+    # "deepseek/deepseek-r1-distill-llama-70b",
+    # "deepseek/deepseek-chat-v3-0324",
     "google/gemma-3-27b-it",
-    "deepseek/deepseek-r1-distill-llama-70b",
-    "deepseek/deepseek-chat-v3-0324",
     "google/gemini-2.5-flash-preview",
 ]
 DEFAULT_JUDGE_MODEL = "google/gemini-2.5-pro-preview-03-25"
@@ -62,14 +101,14 @@ DEFAULT_SEED = None
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(
-    description="Evaluate LLM outputs based on a specific prompt or chain of prompts."
+    description="Evaluate LLM outputs based on a defined workflow."
 )
 parser.add_argument(
-    "--test-prompt-modules",
+    "--workflow",
     type=str,
-    nargs="+",  # Accept multiple prompt modules
     required=True,
-    help=f"Names of the prompt configurations for the test models (executed sequentially). Available: {list(AVAILABLE_PROMPTS.keys())}",
+    choices=list(WORKFLOWS.keys()),
+    help="Name of the evaluation workflow to run.",
 )
 parser.add_argument(
     "--judge-prompt-module",
@@ -121,126 +160,46 @@ parser.add_argument(
 )
 
 
-# --- Helper Functions ---
-async def run_model(model_name: str, prompt: str) -> str:
-    """Runs a single model and returns its output."""
-    try:
-        result = await get_text_completion(model_name, prompt)
-        return result
-    except Exception as e:
-        print(f"Error running model {model_name}: {e}")
-        return f"ERROR: {e}"
-
-
-def create_judge_prompt(
-    instruction_prompt: str, input_data: str, outputs: Dict[str, str]
-) -> str:
-    """Creates the prompt for the judge LLM."""
-    prompt = "You are an expert evaluator tasked with ranking the quality of different Large Language Model (LLM) outputs based on a given instruction and input.\\n\\n"
-    prompt += (
-        f"INSTRUCTION PROMPT GIVEN TO MODELS:\\n---\\n{instruction_prompt}\\n---\\n\\n"
-    )
-    prompt += f"INPUT DATA GIVEN TO MODELS:\\n---\\n{input_data}\\n---\\n\\n"
-    prompt += 'LLM OUTPUTS TO EVALUATE:\\n---"'
-    for i, (model_name, output) in enumerate(outputs.items()):
-        prompt += f"\\nOutput {i + 1} (Model: {model_name}):\\n{output}\\n---"
-
-    prompt += "\\n\\nTASK:\\nEvaluate the outputs based *only* on how well they follow the INSTRUCTION PROMPT for the given INPUT DATA. Consider clarity, structure, adherence to format, and accuracy of the generated summary/actions based *solely* on the provided input context.\\n\\n"
-    prompt += "RANKING FORMAT:\\nProvide your ranking as a JSON object containing two keys: 'ranking' (a list of model names, ordered from best to worst) and 'rationale' (a brief explanation for your ranking decisions). For example:\\n"
-    prompt += (
-        "```json\\n"
-        "{\\n"
-        '  "ranking": ["model_name_best", "model_name_middle", "model_name_worst"],\\n'
-        '  "rationale": "Model A was best because... Model B struggled with... Model C failed to..."\\n'
-        "}\\n"
-        "```\\n"
-    )
-    prompt += f"The available model names are: {list(outputs.keys())}. Return ONLY the JSON object and nothing else."
-
-    return prompt
-
-
-def parse_judge_output(
-    judge_response: str,
-) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Parses the JSON ranking and rationale from the judge's response."""
-    try:
-        # Extract JSON block if necessary
-        if "```json" in judge_response:
-            json_str = judge_response.split("```json\\n")[1].split("\\n```")[0]
-        else:
-            json_str = judge_response
-
-        parsed_json = json.loads(json_str)
-
-        if not isinstance(parsed_json, dict):
-            print(f"Error: Judge output is not a JSON object: {parsed_json}")
-            return None, None
-
-        ranking = parsed_json.get("ranking")
-        rationale = parsed_json.get("rationale")
-
-        if not isinstance(ranking, list) or not all(
-            isinstance(item, str) for item in ranking
-        ):
-            print(f"Error: 'ranking' key is not a list of strings: {ranking}")
-            ranking = None  # Set ranking to None if invalid
-
-        if not isinstance(rationale, str):
-            print(f"Error: 'rationale' key is not a string: {rationale}")
-            rationale = None  # Set rationale to None if invalid
-
-        return ranking, rationale
-
-    except (json.JSONDecodeError, IndexError, TypeError) as e:
-        print(f"Error parsing judge output: {e}\nRaw output:\n{judge_response}")
-        return None, None
-
-
 async def main():
-    """Main function to orchestrate the LLM evaluation pipeline."""
     args = parser.parse_args()
-
-    # Ensure output directory exists
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Get Instruction Prompts from mapping ---
-    test_prompt_module_names = args.test_prompt_modules
-    # Determine judge prompt module name
-    if args.judge_prompt_module:
-        judge_prompt_module_name = args.judge_prompt_module
-    elif len(test_prompt_module_names) == 1:
-        judge_prompt_module_name = test_prompt_module_names[0]
-        print(
-            f"Judge prompt not specified, defaulting to single test prompt: '{judge_prompt_module_name}'"
-        )
-    else:
-        print(
-            "Error: --judge-prompt-module is required when using multiple test prompts."
-        )
-        return  # Exit if judge prompt is needed but not provided
+    selected_workflow_name = args.workflow
+    selected_workflow = WORKFLOWS[selected_workflow_name]
+    print(f"Using workflow: '{selected_workflow_name}'")
 
-    # Validate test prompt modules
-    test_instruction_prompts = []
-    for name in test_prompt_module_names:
-        if name not in AVAILABLE_PROMPTS:
+    # --- Validate Workflow using the imported function ---
+    # Use DEFAULT_INPUT_FORMATTERS imported from workflow_executor
+    is_valid = validate_workflow(
+        workflow_name=selected_workflow_name,
+        workflow_definition=selected_workflow,
+        available_prompts=AVAILABLE_PROMPTS,
+        available_formatters=DEFAULT_INPUT_FORMATTERS,  # Use imported default formatters
+        # Pass the output models for validation if needed within the validator (optional extension)
+    )
+    if not is_valid:
+        print("Workflow validation failed. Exiting.")
+        return
+
+    # --- Determine Judge Prompt ---
+    judge_prompt_module_name = args.judge_prompt_module
+    if not judge_prompt_module_name:
+        last_stage = selected_workflow[-1]
+        if len(last_stage["prompts"]) == 1:
+            judge_prompt_module_name = last_stage["prompts"][0]
             print(
-                f"Error: Test prompt module '{name}' not found. "
-                f"Available prompts: {list(AVAILABLE_PROMPTS.keys())}"
+                f"Judge prompt not specified, defaulting to: '{judge_prompt_module_name}'"
+            )
+        else:
+            print(
+                "Error: --judge-prompt-module is required when the workflow's final stage has multiple prompts."
             )
             return
-        test_instruction_prompts.append(AVAILABLE_PROMPTS[name])
-    print(f"Using test prompt chain: {' -> '.join(test_prompt_module_names)}")
-
-    # Validate judge prompt module (name is now guaranteed to be set if required)
     if judge_prompt_module_name not in AVAILABLE_PROMPTS:
-        print(
-            f"Error: Judge prompt module '{judge_prompt_module_name}' not found. "
-            f"Available prompts: {list(AVAILABLE_PROMPTS.keys())}"
-        )
+        print(f"Error: Judge prompt module '{judge_prompt_module_name}' not found.")
         return
     judge_instruction_prompt = AVAILABLE_PROMPTS[judge_prompt_module_name]
-    print(f"Using judge prompt: '{judge_prompt_module_name}'")
+    print(f"Using judge prompt module: '{judge_prompt_module_name}'")
 
     c = initialize_openrouter_client()
 
@@ -248,7 +207,7 @@ async def main():
     effective_seed = args.seed if args.seed is not None else int(time.time())
     print(f"Using seed: {effective_seed}")
 
-    # Determine input source and construct output filename
+    # Determine input source and construct output filename (Input source logic remains same)
     if args.input_data_file:
         input_source_path = args.input_data_file
         if not input_source_path.is_file():
@@ -270,45 +229,46 @@ async def main():
         )
         print(f"Sampling from CSV files in directory: {input_source_path}")
 
-    # Construct output filename with prompt names, input data name/source, and seed
-    test_prompts_str = "-".join(test_prompt_module_names)
-    output_filename = f"llm_eval_judge-{judge_prompt_module_name}_chain-{test_prompts_str}_{input_data_stem}_seed_{effective_seed}.csv"
+    # Construct output filename with workflow name
+    output_filename = f"llm_eval_judge-{judge_prompt_module_name}_workflow-{selected_workflow_name}_{input_data_stem}_seed_{effective_seed}.csv"
     output_file_path = args.output_dir / output_filename
 
-    # Modify load_and_sample_data call to use the determined source path
-    # Assuming the helper function is updated to handle a file or directory path
+    # Load data (using existing helper)
     sample_df = load_and_sample_data(
         input_source_path, args.num_samples, effective_seed
     )
     if sample_df is None:
-        await c.aclose()  # Close client if exiting early
-        return  # Exit if no data
+        await c.aclose()
+        return
 
-    # 2. Run Test Models and Parse Outputs
-    # Pass the list of test instruction prompts
-    sample_intermediate_results = await run_and_parse_test_models(
+    # 2. Run Test Models according to Workflow
+    # Pass the workflow definition, available prompts, and formatters
+    sample_workflow_results = await run_and_parse_test_models(
         sample_df,
         args.models,
-        test_instruction_prompts,  # Pass the list of prompts
+        selected_workflow,
+        AVAILABLE_PROMPTS,
+        DEFAULT_INPUT_FORMATTERS,  # Pass the default formatters
+        AVAILABLE_OUTPUT_MODELS,  # Pass the output model mapping
     )
 
     # 3. Run Judge Model Evaluation
     # Pass the single judge instruction prompt
     judge_response_map = await run_judge_evaluation(
-        sample_intermediate_results,
+        sample_workflow_results,  # Updated results structure from workflow run
         args.judge_model,
-        judge_instruction_prompt,  # Pass the judge prompt
+        judge_instruction_prompt,
     )
 
     # 4. Aggregate Final Results
-    # Pass necessary args like seed, prompt names etc. if needed by the helper
     results_data = aggregate_results(
-        sample_intermediate_results,
+        sample_workflow_results,
         judge_response_map,
         args.models,
         effective_seed,
-        test_prompt_module_names,  # Pass list of test prompt names
-        judge_prompt_module_name,  # Pass judge prompt name
+        selected_workflow_name,  # Pass workflow name
+        judge_prompt_module_name,
+        selected_workflow,  # Pass workflow definition for context if needed
     )
     results_df = pl.DataFrame(results_data)
 
