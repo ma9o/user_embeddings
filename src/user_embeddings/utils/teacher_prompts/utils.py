@@ -7,15 +7,17 @@ from pydantic import BaseModel
 PROMPT_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
 
 
-def load_prompt(prompt_name: str, version: str = "latest") -> str:
+def load_prompt(prompt_name: str, version: str = "latest") -> tuple[str, str]:
     if version != "latest":
         prompt_path = PROMPT_DIR / prompt_name / f"{version}.txt"
     else:
         # Sort files alphabetically and take the latest
         prompt_path = sorted(PROMPT_DIR / prompt_name / "*.txt")[-1]
 
+    version_str = prompt_path.stem.split(".")[0]
+
     with open(prompt_path, "r") as f:
-        return f.read()
+        return f.read(), version_str
 
 
 def get_prompt(prompt: str, user_context_raw: str) -> str:

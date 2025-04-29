@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, Callable, Dict, List, Optional, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 
 import polars as pl
 from tqdm.asyncio import tqdm_asyncio
@@ -56,7 +56,7 @@ DEFAULT_INPUT_FORMATTERS: Dict[str, Callable[[Dict[str, str]], str]] = {
 def validate_workflow(
     workflow_name: str,
     workflow_definition: List[PromptStage],
-    available_prompts: Dict[str, str],
+    available_prompts: Dict[str, Tuple[str, str]],
     available_formatters: Dict[str, Callable],
 ) -> bool:
     """
@@ -151,7 +151,7 @@ async def execute_workflow(
     model_name: str,
     initial_input: str,
     workflow: List[PromptStage],  # Use the defined type
-    available_prompts: Dict[str, str],  # Map: prompt_module_name -> prompt_text
+    available_prompts: Dict[str, Tuple[str, str]],  # Map: name -> (text, version)
     input_formatters: Dict[str, Callable[[Dict[str, str]], str]],
 ) -> Dict[str, Any]:
     """Executes a defined workflow for a single model and initial input.
@@ -281,13 +281,14 @@ async def execute_workflow(
         tasks_to_run_ids: List[str] = []
         for prompt_module_name in prompts_in_stage:
             try:
-                instruction_prompt = available_prompts[prompt_module_name]
+                # Get prompt text (first element of tuple)
+                instruction_prompt_text = available_prompts[prompt_module_name][0]
                 # Ensure current_stage_input is a string before formatting prompt
                 if not isinstance(current_stage_input, str):
                     raise TypeError(f"Input for stage {stage_num} is not a string.")
 
                 model_prompt = (
-                    f"{instruction_prompt}\n\nINPUT DATA:\n---\n"
+                    f"{instruction_prompt_text}\n\nINPUT DATA:\n---\n"
                     f"{current_stage_input}\n---"
                 )
                 stage_tasks.append(
@@ -355,7 +356,7 @@ async def run_workflow_on_samples(
     sample_df: pl.DataFrame,
     models_to_test: List[str],
     workflow: List[PromptStage],  # Use the defined type
-    available_prompts: Dict[str, str],
+    available_prompts: Dict[str, Tuple[str, str]],  # Map: name -> (text, version)
     input_formatters: Dict[str, Callable[[Dict[str, str]], str]],
     input_column: str = "formatted_context",  # Allow specifying input column
 ) -> List[Dict[str, Any]]:

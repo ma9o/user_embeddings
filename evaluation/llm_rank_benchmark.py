@@ -7,31 +7,29 @@ from pathlib import Path
 import polars as pl
 from dotenv import load_dotenv
 
-# Import helpers
-from helpers.evaluation_utils import (
-    aggregate_ranking_results,
-    calculate_and_print_leaderboard,
-    load_and_sample_data,
-    run_and_parse_test_models,
-    run_judge_evaluation,
-    save_results,
-)
-
 # Import shared configurations
 from evaluation.config import (
     AVAILABLE_OUTPUT_MODELS,
     AVAILABLE_PROMPTS,
-    WORKFLOWS,  # We still need this for the help text if we override
+    WORKFLOWS,
 )
-from evaluation.helpers.common_args import (  # Import new helper
-    add_common_eval_args,
+from evaluation.helpers.common_args import add_common_eval_args
+
+# Import shared and specific helpers
+from evaluation.helpers.evaluation_utils import (
+    load_and_sample_data,
+    run_and_parse_test_models,
+    save_results,  # Still used here
+)
+from evaluation.helpers.ranking_utils import (
+    aggregate_ranking_results,
+    calculate_and_print_leaderboard,
+    run_judge_evaluation,
 )
 from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
-
-# Import workflow utilities
 from user_embeddings.utils.llm.workflow_executor import (
-    DEFAULT_INPUT_FORMATTERS,  # Import default formatters
-    validate_workflow,  # Import validator
+    DEFAULT_INPUT_FORMATTERS,
+    validate_workflow,
 )
 
 # No longer need direct imports for prompts/models used only in config
@@ -126,8 +124,11 @@ async def main():
     if judge_prompt_module_name not in AVAILABLE_PROMPTS:
         print(f"Error: Judge prompt module '{judge_prompt_module_name}' not found.")
         return
-    judge_instruction_prompt = AVAILABLE_PROMPTS[judge_prompt_module_name]
-    print(f"Using judge prompt module: '{judge_prompt_module_name}'")
+    # Extract only the prompt text for the judge
+    judge_instruction_prompt_text = AVAILABLE_PROMPTS[judge_prompt_module_name][0]
+    print(
+        f"Using judge prompt module: '{judge_prompt_module_name}' (Version: {AVAILABLE_PROMPTS[judge_prompt_module_name][1]})"
+    )
 
     c = initialize_openrouter_client()
 
@@ -192,7 +193,7 @@ async def main():
     judge_response_map = await run_judge_evaluation(
         sample_workflow_results,  # Updated results structure from workflow run
         args.judge_model,
-        judge_instruction_prompt,
+        judge_instruction_prompt_text,  # Pass only the text
     )
 
     # 4. Aggregate Final Results
@@ -204,6 +205,7 @@ async def main():
         selected_workflow_name,  # Pass workflow name
         judge_prompt_module_name,
         selected_workflow,  # Pass workflow definition for context if needed
+        AVAILABLE_PROMPTS,  # Pass available prompts for version lookup
         debug=args.debug,  # Pass the debug flag
     )
     results_df = pl.DataFrame(results_data)

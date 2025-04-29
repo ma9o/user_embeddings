@@ -16,14 +16,16 @@ from evaluation.config import (
 from evaluation.helpers.common_args import (  # Import new helper
     add_common_eval_args,
 )
+from evaluation.helpers.constraint_utils import (
+    aggregate_constraint_results,
+    run_constraint_judge_evaluation,
+)
 
-# Import helpers (using newly added/renamed functions)
+# Import shared and specific helpers
 from evaluation.helpers.evaluation_utils import (
-    aggregate_constraint_results,  # New aggregator
     load_and_sample_data,
-    run_and_parse_test_models,  # Still used to get model output
-    run_constraint_judge_evaluation,  # New judge runner
-    save_results,
+    run_and_parse_test_models,
+    save_results,  # Shared save function
 )
 from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
 
@@ -98,8 +100,11 @@ async def main():
             f"Error: Judge constraints prompt module '{judge_prompt_module_name}' not found."
         )
         return
-    judge_constraints_prompt = AVAILABLE_PROMPTS[judge_prompt_module_name]
-    print(f"Using judge constraints prompt: '{judge_prompt_module_name}'")
+    # Extract only the prompt text
+    judge_constraints_prompt_text = AVAILABLE_PROMPTS[judge_prompt_module_name][0]
+    print(
+        f"Using judge constraints prompt: '{judge_prompt_module_name}' (Version: {AVAILABLE_PROMPTS[judge_prompt_module_name][1]})"
+    )
 
     c = initialize_openrouter_client()
 
@@ -170,7 +175,7 @@ async def main():
         sample_workflow_results=sample_workflow_results,
         model_to_evaluate=args.model_to_evaluate,
         judge_model=args.judge_model,
-        judge_constraints_prompt=judge_constraints_prompt,  # Constraints definition
+        judge_constraints_prompt_text=judge_constraints_prompt_text,  # Pass only text
     )
 
     # 4. Aggregate Final Results (New helper)
@@ -182,6 +187,7 @@ async def main():
         workflow_name=selected_workflow_name,
         judge_prompt_name=judge_prompt_module_name,  # Renamed back
         workflow=selected_workflow,
+        available_prompts=AVAILABLE_PROMPTS,  # Pass available prompts for version lookup
     )
     results_df = pl.DataFrame(results_data)
 
@@ -199,7 +205,9 @@ async def main():
         num_samples_judged = results_df.filter(pl.col("violation_count") >= 0).height
         print("--- Constraint Violation Summary ---")
         print(f"Model Evaluated: {args.model_to_evaluate}")
-        print(f"Prompt Definition: {judge_prompt_module_name}")
+        print(
+            f"Prompt Definition: {judge_prompt_module_name} (Version: {AVAILABLE_PROMPTS.get(judge_prompt_module_name, ('', 'N/A'))[1]})"
+        )
         print(f"Total Samples Judged: {num_samples_judged}")
         print(f"Total Violations Found: {total_violations}")
         if num_samples_judged > 0:

@@ -8,4 +8,4 @@ class InferenceOutput(BaseModel):
     actions: list[list[str]]
 
 
-PROMPT = load_prompt("inference")
+PROMPT, VERSION = load_prompt("inference")

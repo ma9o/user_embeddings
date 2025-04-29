@@ -14,4 +14,4 @@ class PromptOutput(BaseModel):
     )
 
 
-PROMPT = load_prompt("koa_only")
+PROMPT, VERSION = load_prompt("koa_only")

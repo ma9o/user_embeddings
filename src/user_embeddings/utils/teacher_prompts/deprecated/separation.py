@@ -10,4 +10,4 @@ class SeparationOutput(BaseModel):
     actions: list[Union[str, "SeparationOutput"]]
 
 
-PROMPT = load_prompt("separation")
+PROMPT, VERSION = load_prompt("separation")

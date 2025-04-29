@@ -11,4 +11,4 @@ class PromptOutput(BaseModel):
     intents: List[str] = Field(..., description="List of extracted Intent statements.")
 
 
-PROMPT = load_prompt("intent_only")
+PROMPT, VERSION = load_prompt("intent_only")

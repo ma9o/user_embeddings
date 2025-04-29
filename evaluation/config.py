@@ -1,31 +1,43 @@
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 # Import workflow utilities - needed for WORKFLOWS type hint
 from user_embeddings.utils.llm.workflow_executor import PromptStage
 
 # Import teacher prompts - needed for AVAILABLE_PROMPTS and WORKFLOWS
 from user_embeddings.utils.teacher_prompts import (
-    all_in_one,
-    intent_only,
-    koa_only,
+    all_in_one as all_in_one_module,
+)
+from user_embeddings.utils.teacher_prompts import (
+    intent_only as intent_only_module,
+)
+from user_embeddings.utils.teacher_prompts import (
+    koa_only as koa_only_module,
+)
+from user_embeddings.utils.teacher_prompts.deprecated import (
+    inference as inference_module,
+)
+from user_embeddings.utils.teacher_prompts.deprecated import (
+    separation as separation_module,
 )
 
 # Import Pydantic models for AVAILABLE_OUTPUT_MODELS
-from user_embeddings.utils.teacher_prompts import intent_only as intent_only_module
-from user_embeddings.utils.teacher_prompts import koa_only as koa_only_module
-from user_embeddings.utils.teacher_prompts.deprecated import inference, separation
+# Moved these imports up
+# from user_embeddings.utils.teacher_prompts import intent_only as intent_only_module
+# from user_embeddings.utils.teacher_prompts import koa_only as koa_only_module
+# from user_embeddings.utils.teacher_prompts.deprecated import inference, separation
 
-# --- Shared Prompt Mapping ---
+# --- Shared Prompt Mapping --- (Now includes version)
 # Used by both llm_rank_benchmark and prompt_adherence
-AVAILABLE_PROMPTS: Dict[str, str] = {
-    "all_in_one": all_in_one.PROMPT,
-    "inference": inference.PROMPT,
-    "separation": separation.PROMPT,
-    "intent_only": intent_only.PROMPT,
-    "koa_only": koa_only.PROMPT,
-    # Add any NEW prompts specifically for constraint definitions here if needed elsewhere
-    # e.g., "constraint_checker_v1": constraint_checker_v1.PROMPT,
+# Stores tuple: (prompt_text, prompt_version)
+AVAILABLE_PROMPTS: Dict[str, Tuple[str, str]] = {
+    "all_in_one": (all_in_one_module.PROMPT, all_in_one_module.VERSION),
+    "inference": (inference_module.PROMPT, inference_module.VERSION),
+    "separation": (separation_module.PROMPT, separation_module.VERSION),
+    "intent_only": (intent_only_module.PROMPT, intent_only_module.VERSION),
+    "koa_only": (koa_only_module.PROMPT, koa_only_module.VERSION),
+    # Add any NEW prompts here, ensuring they export PROMPT and VERSION
+    # e.g., "constraint_checker_v1": (constraint_checker_v1.PROMPT, constraint_checker_v1.VERSION),
 }
 
 # --- Shared Pydantic Output Model Mapping ---
