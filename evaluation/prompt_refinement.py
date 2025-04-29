@@ -1,7 +1,8 @@
 import argparse
 import asyncio
 import json  # For parsing violations
-import time  # Added for timestamp seeding
+
+# import time  # No longer needed here
 from pathlib import Path
 
 import polars as pl
@@ -28,6 +29,7 @@ from evaluation.helpers.evaluation_utils import (  # Import relevant helpers
     # save_results is not used here
 )
 from evaluation.helpers.refiner_utils import (
+    determine_effective_seed,  # Import the new helper
     save_single_row_results_appending,  # Import the specific appending helper
 )
 from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
@@ -62,7 +64,7 @@ This script can be used iteratively for prompt refinement. For example, to refin
 AI AGENT: 
 - When instructed to run this eval X times, X is the number of iterations. Do not use a for loop, run them one by one.
 - You will be in charge of creating the new prompt versions, don't be shy.
-- When creating a new prompt version, make sure to both explain the incremental constraint and to include a new verbatim example of valid output for the constraint (leverage the 0-shot capabilities of the LLM).
+- IMPORTANT: When creating a new prompt version, make sure to both explain the incremental constraint and to include a new verbatim example of valid output for the constraint (leverage the 0-shot capabilities of the LLM).
     """
 )
 
@@ -178,88 +180,13 @@ async def main():
     print(f"Target output file: {output_file_path}")  # Updated print message
 
     # --- Determine Effective Seed ---
-    effective_seed = args.seed
-    if effective_seed is None:
-        print("Seed not provided, attempting to determine from previous run...")
-        if output_file_path.exists():
-            try:
-                # Scan the CSV lazily, explicitly setting dtypes for needed columns
-                lazy_df = pl.scan_csv(
-                    output_file_path,
-                    has_header=True,  # Assume header exists
-                )
-
-                # Select necessary columns, get the last row, and collect
-                last_row_df = (
-                    lazy_df.select(["seed", "violation_count"]).tail(1).collect()
-                )
-
-                if not last_row_df.is_empty():
-                    # Access items from the collected eager DataFrame
-                    last_seed = last_row_df.item(0, "seed")
-                    last_violation_count_str = last_row_df.item(
-                        0, "violation_count"
-                    )  # Get as string first
-
-                    # Try to interpret violation_count strictly
-                    try:
-                        last_violation_count = int(last_violation_count_str)
-                    except (ValueError, TypeError) as e:
-                        # Failed to convert violation_count to int - Treat as error
-                        raise RuntimeError(
-                            f"Error interpreting 'violation_count' ('{last_violation_count_str}') from last row of '{output_file_path}'. Expected an integer. Cannot proceed."
-                        ) from e
-
-                    # Determine seed based on valid violation_count
-                    if last_violation_count == 0:
-                        effective_seed = int(time.time())
-                        print(
-                            f"Last run (seed {last_seed}) had 0 violations. Generating new seed: {effective_seed}"
-                        )
-                    else:
-                        effective_seed = last_seed
-                        print(
-                            f"Last run (seed {last_seed}) had {last_violation_count} violation(s). Reusing seed: {effective_seed}"
-                        )
-                else:
-                    # File exists but reading last row yielded no data (e.g., only header)
-                    raise RuntimeError(
-                        f"Output file '{output_file_path}' exists but is empty or contains no data rows. Cannot determine seed from previous run. Please provide a seed or ensure the file has valid data."
-                    )
-
-            except pl.exceptions.NoDataError as e:
-                # Handle cases where polars finds no data (e.g., file exists but is truly empty)
-                raise RuntimeError(
-                    f"Output file '{output_file_path}' exists but Polars found no data. Cannot determine seed. Error: {e}"
-                ) from e
-            except (
-                pl.exceptions.SchemaError,
-                pl.exceptions.ComputeError,
-                KeyError,
-                IndexError,
-            ) as e:
-                # Handle cases where columns are missing or row access fails
-                raise RuntimeError(
-                    f"Error reading schema or required columns ('seed', 'violation_count') from '{output_file_path}'. Cannot determine seed. Error: {e}"
-                ) from e
-            except FileNotFoundError as e:
-                # This theoretically shouldn't happen because of the .exists() check, but handle defensively.
-                raise RuntimeError(
-                    f"File '{output_file_path}' not found during read operation, despite existing initially. Cannot determine seed. Error: {e}"
-                ) from e
-            except Exception as e:
-                # Catch any other unexpected errors during file read/processing
-                raise RuntimeError(
-                    f"Unexpected error reading or processing '{output_file_path}' to determine seed. Error: {e}"
-                ) from e
-        else:
-            # Output file does not exist - this is the only non-error case for automatic seed generation
-            effective_seed = int(time.time())
-            print(
-                f"Output file '{output_file_path}' not found. Generating initial seed: {effective_seed}"
-            )
-    else:
-        print(f"Using provided seed: {effective_seed}")
+    # Call the helper function from refiner_utils
+    try:
+        effective_seed = determine_effective_seed(args.seed, output_file_path)
+    except RuntimeError as e:
+        print(f"Error determining seed: {e}")
+        await c.aclose()
+        return
 
     # --- Load Single Sample ---
     # effective_seed is now guaranteed to have a value

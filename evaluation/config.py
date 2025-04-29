@@ -14,12 +14,6 @@ from user_embeddings.utils.teacher_prompts import (
 from user_embeddings.utils.teacher_prompts import (
     koa_only as koa_only_module,
 )
-from user_embeddings.utils.teacher_prompts.deprecated import (
-    inference as inference_module,
-)
-from user_embeddings.utils.teacher_prompts.deprecated import (
-    separation as separation_module,
-)
 
 # Import Pydantic models for AVAILABLE_OUTPUT_MODELS
 # Moved these imports up
@@ -32,8 +26,8 @@ from user_embeddings.utils.teacher_prompts.deprecated import (
 # Stores tuple: (prompt_text, prompt_version)
 AVAILABLE_PROMPTS: Dict[str, Tuple[str, str]] = {
     "all_in_one": (all_in_one_module.PROMPT, all_in_one_module.VERSION),
-    "inference": (inference_module.PROMPT, inference_module.VERSION),
-    "separation": (separation_module.PROMPT, separation_module.VERSION),
+    # "inference": (inference_module.PROMPT, inference_module.VERSION),
+    # "separation": (separation_module.PROMPT, separation_module.VERSION),
     "intent_only": (intent_only_module.PROMPT, intent_only_module.VERSION),
     "koa_only": (koa_only_module.PROMPT, koa_only_module.VERSION),
     # Add any NEW prompts here, ensuring they export PROMPT and VERSION

@@ -22,6 +22,8 @@ def load_prompt(prompt_name: str, version: str = "latest") -> tuple[str, str]:
 
     version_str = prompt_path.stem.split(".")[0]
 
+    print(f"Loading prompt {prompt_name} from {prompt_path}")
+
     with open(prompt_path, "r") as f:
         return f.read(), version_str
 
