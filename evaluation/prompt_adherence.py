@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import time
-from datetime import datetime
 from pathlib import Path
 
 import polars as pl
@@ -27,6 +26,7 @@ from evaluation.helpers.evaluation_utils import (
     run_and_parse_test_models,
     save_results,  # Shared save function
 )
+from evaluation.helpers.filename_utils import generate_eval_filename
 from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
 
 # Import workflow utilities
@@ -134,16 +134,24 @@ async def main():
         input_data_stem = f"combined_{input_source_path.name}"
         print(f"Sampling from CSV files in directory: {input_source_path}")
 
-    # Construct output filename
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = (
-        f"constraint_eval_model-{args.model_to_evaluate.replace('/', '_')}_"  # Sanitize model name
-        f"judge-{args.judge_model.replace('/', '_')}_"  # Sanitize judge model name
-        f"prompt-{judge_prompt_module_name}_"  # Constraints used
-        f"workflow-{selected_workflow_name}_{input_data_stem}_seed_{effective_seed}_{timestamp}.csv"
-    )
-    # Use args.output_dir from common_args
-    output_file_path = args.output_dir / output_filename
+    # Construct output filename using the utility
+    try:
+        # Generate the filename path - append=False requires seed and adds timestamp
+        output_file_path = generate_eval_filename(
+            output_dir=args.output_dir,
+            prefix=Path(__file__).stem,
+            workflow_name=selected_workflow_name,
+            judge_model=args.judge_model,
+            judge_prompt_module_name=judge_prompt_module_name,
+            input_data_stem=input_data_stem,
+            seed=effective_seed,
+            append=False,
+        )
+        print(f"Output will be saved to: {output_file_path}")
+    except ValueError as e:
+        print(f"Error generating filename: {e}")
+        await c.aclose()
+        return
 
     # Load data (Reused helper)
     # Use args.num_samples from common_args

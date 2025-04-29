@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import time
-from datetime import datetime
 from pathlib import Path
 
 import polars as pl
@@ -21,6 +20,7 @@ from evaluation.helpers.evaluation_utils import (
     run_and_parse_test_models,
     save_results,  # Still used here
 )
+from evaluation.helpers.filename_utils import generate_eval_filename
 from evaluation.helpers.ranking_utils import (
     aggregate_ranking_results,
     calculate_and_print_leaderboard,
@@ -160,11 +160,24 @@ async def main():
         )
         print(f"Sampling from CSV files in directory: {input_source_path}")
 
-    # Construct output filename with workflow name and timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"llm_eval_judge-{judge_prompt_module_name}_workflow-{selected_workflow_name}_{input_data_stem}_seed_{effective_seed}_{timestamp}.csv"
-    # Use args.output_dir from common_args
-    output_file_path = args.output_dir / output_filename
+    # Construct output filename using the utility
+    try:
+        # Generate the filename path - append=False requires seed and adds timestamp
+        output_file_path = generate_eval_filename(
+            output_dir=args.output_dir,
+            prefix=Path(__file__).stem,
+            workflow_name=selected_workflow_name,
+            judge_model=args.judge_model,
+            judge_prompt_module_name=judge_prompt_module_name,
+            input_data_stem=input_data_stem,
+            seed=effective_seed,
+            append=False,
+        )
+        print(f"Output will be saved to: {output_file_path}")
+    except ValueError as e:
+        print(f"Error generating filename: {e}")
+        await c.aclose()
+        return
 
     # Load data (using existing helper)
     # Use args.num_samples from common_args

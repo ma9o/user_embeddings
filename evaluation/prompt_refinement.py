@@ -28,6 +28,7 @@ from evaluation.helpers.evaluation_utils import (  # Import relevant helpers
     run_and_parse_test_models,
     # save_results is not used here
 )
+from evaluation.helpers.filename_utils import generate_eval_filename
 from evaluation.helpers.refiner_utils import (
     determine_effective_seed,  # Import the new helper
     save_single_row_results_appending,  # Import the specific appending helper
@@ -167,18 +168,23 @@ async def main():
         print(f"Sampling from CSV files in directory: {input_source_path}")
 
     # --- Construct Output Filename (needed for seed logic) ---
-    sanitized_model = args.model_to_evaluate.replace("/", "_")
-    sanitized_judge = args.judge_model.replace("/", "_")
-    # Use judge_prompt_module_name which is guaranteed to be set here
-    output_filename = (
-        f"refine_results_model-{sanitized_model}_"
-        f"workflow-{selected_workflow_name}_"
-        f"judge-{sanitized_judge}_"
-        f"prompt-{judge_prompt_module_name}_"
-        f"input-{input_data_stem}.csv"  # Consistent filename for appending
-    )
-    output_file_path = args.output_dir / output_filename
-    print(f"Target output file: {output_file_path}")  # Updated print message
+    try:
+        # Generate the filename path - append=True means no seed/timestamp in name
+        output_file_path = generate_eval_filename(
+            output_dir=args.output_dir,
+            prefix=Path(__file__).stem,
+            workflow_name=selected_workflow_name,
+            judge_model=args.judge_model,
+            judge_prompt_module_name=judge_prompt_module_name,
+            input_data_stem=input_data_stem,
+            append=True,
+            seed=None,  # Pass None for seed when appending
+        )
+        print(f"Target output file: {output_file_path}")
+    except ValueError as e:
+        print(f"Error generating filename: {e}")
+        await c.aclose()
+        return
 
     # --- Determine Effective Seed ---
     # Call the helper function from refiner_utils
