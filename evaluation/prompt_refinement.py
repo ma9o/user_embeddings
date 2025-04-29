@@ -57,6 +57,7 @@ This script can be used iteratively for prompt refinement. For example, to refin
 2. Examine the console output summary for violations (non-zero 'violation_count').
 3. If violations exist, analyze the 'violated_constraints'.
 4. Create a new prompt(s) version file(s) (e.g., `prompts/intent_only/v2.txt`, `prompts/koa_only/v2.txt`) with minimal changes to address the observed violations.
+4.1 Make sure to update both the workflow and the judge prompts!
 5. Rerun the script. The system automatically picks up the latest prompt versions. 
 5.1 If no violations were found in the previous run, the script will select another random sample of data to evaluate; otherwise, it will use the same sample as in the previous run.
 6. Repeat steps 2-5 until violations are eliminated or the maximum number of iterations is reached.
