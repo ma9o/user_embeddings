@@ -1,4 +1,3 @@
-PROMPT = """
 You are an Expert User Profiler and Semantic Distiller.
 Your primary task is to analyze a raw conversation thread, identify all contributions made by the participant designated as 'SUBJECT', and distill these contributions into a flat list of concise, atomic, self-contained statements representing their Knowledge, Opinion, Attributes, or Intent (KOAI).
 
@@ -87,4 +86,3 @@ Correct JSON Output (Flat list, atomic, format-agnostic, semantically rich, gene
 BEGIN TASK
 
 Input:
-"""

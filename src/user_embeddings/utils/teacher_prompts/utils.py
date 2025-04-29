@@ -1,7 +1,21 @@
 import json
+from pathlib import Path
 from typing import Any, Type
 
 from pydantic import BaseModel
+
+PROMPT_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
+
+
+def load_prompt(prompt_name: str, version: str = "latest") -> str:
+    if version != "latest":
+        prompt_path = PROMPT_DIR / prompt_name / f"{version}.txt"
+    else:
+        # Sort files alphabetically and take the latest
+        prompt_path = sorted(PROMPT_DIR / prompt_name / "*.txt")[-1]
+
+    with open(prompt_path, "r") as f:
+        return f.read()
 
 
 def get_prompt(prompt: str, user_context_raw: str) -> str:

@@ -2,6 +2,8 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
+from .utils import load_prompt
+
 
 class PromptOutput(BaseModel):
     """Pydantic model for validating the output of the Intent extraction prompt."""
@@ -9,46 +11,4 @@ class PromptOutput(BaseModel):
     intents: List[str] = Field(..., description="List of extracted Intent statements.")
 
 
-PROMPT = """
-You are an Expert User Profiler specializing in identifying interaction Intents.
-Your primary task is to analyze a raw conversation thread, identify contributions made by 'SUBJECT', and distill ONLY the **Intent (I)** behind their specific actions within the immediate context. **DO NOT extract Knowledge, Opinions, or Attributes.**
-
-Input:
-A JSON structure representing the raw conversation thread (list of message objects), where the target participant is identified by the username "SUBJECT". You need the full context to understand the purpose.
-
-Output Format:
-Generate a single JSON object containing a single key "intents" whose value is a flat list of strings. Each string must represent a single, atomic **Intent** statement derived from the SUBJECT's actions *in that specific situation*, prefixed with `INTENT:`.
-
-Core Requirements for Intent Extraction:
-
-1.  **SUBJECT Focus & Situational Context:** Analyze SUBJECT's contributions to understand their purpose *at that moment*. Use the surrounding context (other messages/sources) to determine *why* they performed that action then.
-2.  **Abstract Format (for Intent only):** Output MUST be a flat list of INTENT statements.
-3.  **Direct Phrasing of Purpose:** State the inferred *goal* or *purpose* directly.
-4.  **Embed Necessary Situational Context:**
-    *   Intent statements MUST retain necessary situational context (phrased generically) to capture the *why* behind that particular action. This context might involve the state of the discussion, the information being exchanged, or a generalized role of others involved.
-    *   Use bracketed additions or careful phrasing (e.g., "[when conflicting information is present]", "[in response to a query about X]", "[towards an advice-seeker]").
-5.  **Atomicity:** Each statement must represent a single, distinct intent driving a specific part of the SUBJECT's action.
-6.  **IGNORE KOA:** Do not generate statements about Knowledge, Opinions, or Attributes. Focus solely on the purpose/goal (Intent).
-
-Intent Definition:
-
-*   **INTENT:** [Context-Dependent!] Describes the SUBJECT's immediate purpose or goal for acting *in that specific moment/situation*. Driven by immediate context and potentially interaction dynamics. (e.g., "INTENT: Seeks clarification of investment strategy [when presented with conflicting considerations about market timing and costs] by prompting for core objectives like time horizon.", "INTENT: Aims to correct a factual inaccuracy stated previously [regarding topic Y].")
-
-Example (Input JSON is the same as before):
-
-Correct JSON Output for Intent:
-```json
-{
-  "intents": [
-    // NOTE: Only the INTENT statement is included here
-    "INTENT: Wants to help an advice-seeker clarify their investment strategy by prompting for core objectives [like time horizon], perceiving a potential mismatch between stated means [like focusing on low costs] and unstated goals."
- ]
-}
-```
-
----
-
-BEGIN TASK
-
-Input:
-"""
+PROMPT = load_prompt("intent_only")
