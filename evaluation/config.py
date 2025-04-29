@@ -78,6 +78,14 @@ WORKFLOWS: Dict[str, List[PromptStage]] = {
             "input_formatter": None,
         }
     ],
+    "single_intent_only": [
+        {
+            "stage": 1,
+            "prompts": ["intent_only"],
+            "input_from": None,
+            "input_formatter": None,
+        }
+    ],
     # Add other common workflows here
 }
 
