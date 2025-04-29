@@ -48,7 +48,22 @@ DEFAULT_REFINER_OUTPUT_SUBDIR = "single_sample_refinement_results"  # Specific s
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(
-    description="Evaluate a single LLM's output against constraints for a *single* sample, appending results."
+    description="""Evaluate a single LLM's output against constraints for a *single* sample, appending results.     
+
+This script can be used iteratively for prompt refinement. For example, to refine the 'all_in_one' prompt:
+1. Run: `python -m evaluation.prompt_refinement --workflow single_all_in_one --judge-prompt-module all_in_one`
+2. Examine the console output summary for violations (non-zero 'violation_count').
+3. If violations exist, analyze the 'violated_constraints'.
+4. Create a new prompt version file (e.g., `prompts/all_in_one/v2.txt`) with minimal changes to address the observed violations.
+5. Rerun the script. The system automatically picks up the latest prompt version from the `prompts/all_in_one/` directory. 
+5.1 If no violations were found in the previous run, the script will select another random sample of data to evaluate; otherwise, it will use the same sample as in the previous run.
+6. Repeat steps 2-5 until violations are eliminated or the maximum number of iterations is reached.
+
+AI AGENT: 
+- When instructed to run this eval X times, X is the number of iterations. Do not use a for loop, run them one by one.
+- You will be in charge of creating the new prompt versions, don't be shy.
+- When creating a new prompt version, make sure to both explain the incremental constraint and to exemplify the new constraint description in the prompt.
+    """
 )
 
 # Add common arguments (will add --seed, --num-samples etc.)
