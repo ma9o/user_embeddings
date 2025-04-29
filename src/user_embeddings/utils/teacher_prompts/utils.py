@@ -4,7 +4,7 @@ from typing import Any, Type
 
 from pydantic import BaseModel
 
-PROMPT_DIR = Path(__file__).parent.parent.parent.parent / "prompts"
+PROMPT_DIR = Path(__file__).parent.parent.parent.parent.parent / "prompts"
 
 
 def load_prompt(prompt_name: str, version: str = "latest") -> tuple[str, str]:
@@ -12,7 +12,13 @@ def load_prompt(prompt_name: str, version: str = "latest") -> tuple[str, str]:
         prompt_path = PROMPT_DIR / prompt_name / f"{version}.txt"
     else:
         # Sort files alphabetically and take the latest
-        prompt_path = sorted(PROMPT_DIR / prompt_name / "*.txt")[-1]
+        # Fix: Use .glob() to get an iterable list of paths
+        prompt_files = list((PROMPT_DIR / prompt_name).glob("*.txt"))
+        if not prompt_files:
+            raise FileNotFoundError(
+                f"No prompt files found in {PROMPT_DIR / prompt_name}"
+            )
+        prompt_path = sorted(prompt_files)[-1]
 
     version_str = prompt_path.stem.split(".")[0]
 

@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json  # For parsing violations
+import time  # Added for timestamp seeding
 from pathlib import Path
 
 import polars as pl
@@ -38,6 +39,9 @@ from user_embeddings.utils.llm.workflow_executor import (
 load_dotenv()
 project_root = Path(__file__).resolve().parent.parent
 
+# Define NUM_SAMPLES constant
+NUM_SAMPLES = 1
+
 # --- Script-Specific Default Configuration ---
 DEFAULT_EVAL_MODEL = "google/gemma-3-27b-it"
 DEFAULT_REFINER_OUTPUT_SUBDIR = "single_sample_refinement_results"  # Specific subdir
@@ -58,30 +62,34 @@ parser.add_argument(
     help="The specific model whose output will be judged.",
 )
 
-# Override/Adjust common arguments
-parser.set_defaults(num_samples=1)  # Force num_samples to 1 for this script
-# Make seed required
+# Override/Adjust common arguments - Post-process arguments added by common helper
+actions_to_remove = []
 for action in parser._actions:
     if action.dest == "seed":
+        action.required = False  # Make seed optional
+        action.help = "Random seed for sampling. If omitted, behavior depends on output file state."
+    elif action.dest == "num_samples":
+        # Mark for removal instead of modifying help text
+        actions_to_remove.append(action)
+    elif action.dest == "judge_prompt_module":
+        # Ensure judge prompt is required for this script
         action.required = True
-        action.help += " (Required for reproducibility in this script)"
-    if action.dest == "num_samples":
-        action.help = "Number of samples to evaluate (Fixed to 1 for this script)."
+        action.help += " (Required for this script)"
+
+# Remove the num_samples argument action
+for action in actions_to_remove:
+    parser._actions.remove(action)
+    # Also remove from the option string map if present
+    for option_string in action.option_strings:
+        parser._option_string_actions.pop(option_string, None)
 
 
 async def main():
     args = parser.parse_args()
 
     # --- Basic Validations ---
-    if args.num_samples != 1:
-        print("Error: This script is designed to run with exactly 1 sample.")
-        print("Please use --num-samples 1 (or omit it as it defaults to 1).")
-        return
-
-    if args.seed is None:
-        # This should not happen due to the 'required=True' change, but belt-and-suspenders
-        print("Error: A --seed must be provided for reproducible sample selection.")
-        return
+    # Removed num_samples check as it's fixed to 1 internally
+    # Removed seed check as it's now optional
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -104,6 +112,9 @@ async def main():
 
     # --- Judge Constraints Prompt Setup ---
     judge_prompt_module_name = args.judge_prompt_module
+    # The check if judge_prompt_module_name is None should happen if args.judge_prompt_module is None after parsing
+    # But since we made it required=True above, argparse handles this.
+    # Keep the check if it's in AVAILABLE_PROMPTS
     if judge_prompt_module_name not in AVAILABLE_PROMPTS:
         print(
             f"Error: Judge constraints prompt module '{judge_prompt_module_name}' not found."
@@ -117,11 +128,7 @@ async def main():
 
     c = initialize_openrouter_client()
 
-    # --- Load Single Sample ---
-    effective_seed = args.seed  # Seed is required and validated
-    print(f"Using seed: {effective_seed} to select sample")
-
-    # Determine input source
+    # --- Determine Input Source ---
     if args.input_data_file:
         input_source_path = args.input_data_file
         if not input_source_path.is_file():
@@ -141,18 +148,10 @@ async def main():
         input_data_stem = f"combined_{input_source_path.name}"
         print(f"Sampling from CSV files in directory: {input_source_path}")
 
-    # Load the single sample
-    sample_df = load_and_sample_data(
-        input_source_path, 1, effective_seed
-    )  # num_samples=1
-    if sample_df is None or sample_df.is_empty():
-        print("Error: Failed to load the single sample.")
-        await c.aclose()
-        return
-
-    # --- Construct Output Filename (No Timestamp) ---
+    # --- Construct Output Filename (needed for seed logic) ---
     sanitized_model = args.model_to_evaluate.replace("/", "_")
     sanitized_judge = args.judge_model.replace("/", "_")
+    # Use judge_prompt_module_name which is guaranteed to be set here
     output_filename = (
         f"refine_results_model-{sanitized_model}_"
         f"workflow-{selected_workflow_name}_"
@@ -161,7 +160,109 @@ async def main():
         f"input-{input_data_stem}.csv"  # Consistent filename for appending
     )
     output_file_path = args.output_dir / output_filename
-    print(f"Results will be appended to: {output_file_path}")
+    print(f"Target output file: {output_file_path}")  # Updated print message
+
+    # --- Determine Effective Seed ---
+    effective_seed = args.seed
+    if effective_seed is None:
+        print("Seed not provided, attempting to determine from previous run...")
+        if output_file_path.exists():
+            try:
+                # Scan the CSV lazily, explicitly setting dtypes for needed columns
+                lazy_df = pl.scan_csv(
+                    output_file_path,
+                    has_header=True,  # Assume header exists
+                )
+
+                # Select necessary columns, get the last row, and collect
+                last_row_df = (
+                    lazy_df.select(["seed", "violation_count"]).tail(1).collect()
+                )
+
+                if not last_row_df.is_empty():
+                    # Access items from the collected eager DataFrame
+                    last_seed = last_row_df.item(0, "seed")
+                    last_violation_count_str = last_row_df.item(
+                        0, "violation_count"
+                    )  # Get as string first
+
+                    # Try to interpret violation_count strictly
+                    try:
+                        last_violation_count = int(last_violation_count_str)
+                    except (ValueError, TypeError) as e:
+                        # Failed to convert violation_count to int - Treat as error
+                        raise RuntimeError(
+                            f"Error interpreting 'violation_count' ('{last_violation_count_str}') from last row of '{output_file_path}'. Expected an integer. Cannot proceed."
+                        ) from e
+
+                    # Determine seed based on valid violation_count
+                    if last_violation_count == 0:
+                        effective_seed = int(time.time())
+                        print(
+                            f"Last run (seed {last_seed}) had 0 violations. Generating new seed: {effective_seed}"
+                        )
+                    else:
+                        effective_seed = last_seed
+                        print(
+                            f"Last run (seed {last_seed}) had {last_violation_count} violation(s). Reusing seed: {effective_seed}"
+                        )
+                else:
+                    # File exists but reading last row yielded no data (e.g., only header)
+                    raise RuntimeError(
+                        f"Output file '{output_file_path}' exists but is empty or contains no data rows. Cannot determine seed from previous run. Please provide a seed or ensure the file has valid data."
+                    )
+
+            except pl.exceptions.NoDataError as e:
+                # Handle cases where polars finds no data (e.g., file exists but is truly empty)
+                raise RuntimeError(
+                    f"Output file '{output_file_path}' exists but Polars found no data. Cannot determine seed. Error: {e}"
+                ) from e
+            except (
+                pl.exceptions.SchemaError,
+                pl.exceptions.ComputeError,
+                KeyError,
+                IndexError,
+            ) as e:
+                # Handle cases where columns are missing or row access fails
+                raise RuntimeError(
+                    f"Error reading schema or required columns ('seed', 'violation_count') from '{output_file_path}'. Cannot determine seed. Error: {e}"
+                ) from e
+            except FileNotFoundError as e:
+                # This theoretically shouldn't happen because of the .exists() check, but handle defensively.
+                raise RuntimeError(
+                    f"File '{output_file_path}' not found during read operation, despite existing initially. Cannot determine seed. Error: {e}"
+                ) from e
+            except Exception as e:
+                # Catch any other unexpected errors during file read/processing
+                raise RuntimeError(
+                    f"Unexpected error reading or processing '{output_file_path}' to determine seed. Error: {e}"
+                ) from e
+        else:
+            # Output file does not exist - this is the only non-error case for automatic seed generation
+            effective_seed = int(time.time())
+            print(
+                f"Output file '{output_file_path}' not found. Generating initial seed: {effective_seed}"
+            )
+    else:
+        print(f"Using provided seed: {effective_seed}")
+
+    # --- Load Single Sample ---
+    # effective_seed is now guaranteed to have a value
+    print(f"Using effective seed: {effective_seed} to select sample")
+
+    # Load the single sample (using constant NUM_SAMPLES)
+    sample_df = load_and_sample_data(
+        input_source_path,
+        NUM_SAMPLES,
+        effective_seed,  # Use constant and effective_seed
+    )
+    if sample_df is None or sample_df.is_empty():
+        print("Error: Failed to load the single sample.")
+        await c.aclose()
+        return
+
+    # --- Output File Path Confirmation (already constructed and printed earlier) ---
+    # print(f"Results will be appended to: {output_file_path}") # Removed redundant print
 
     # --- Run Model Workflow ---
     print(
