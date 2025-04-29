@@ -33,7 +33,6 @@ IMPORTANT: Think step by step before providing th final JSON result.
 ---
 
 Example 1:
-
 [
   {
     "user": "fqn",
@@ -64,7 +63,7 @@ Example 1:
   }
 ]
 
-Correct JSON Output:
+Correct JSON Output (after providing your rationale):
 ```json
 {
   "intents":[
@@ -76,7 +75,6 @@ Correct JSON Output:
 ---
 
 Example 2:
-
 [
   {
     "user": "Nancheon",
@@ -93,7 +91,7 @@ Example 2:
   }
 ]
 
-Correct JSON Output:
+Correct JSON Output (after providing your rationale):
 ```json
 {
   "intents": [
@@ -109,6 +107,45 @@ Wrong JSON Output:
   "intents": [
     "INTENT: Attempts to contribute to a community focused on cringe or absurd content through intentionally random and meme-based expression.",
     # WRONG: This describes the ACTION, not the GOAL
+  ]
+}
+```
+
+---
+
+Example 3:
+[
+  {
+    "user": "LetsGoToCommercial",
+    "time": "25-08-2015 13:55",
+    "content": "Title: Lets talk Stockbrokers\nSubreddit: investing\nBody: Looking to get into the stockmarket, which brokers do you guys use and why? The top names so far seem like Robinhood, ETrade, Scottrade and TD Ameritrade. Ive done research, so far they make TD Ameritrade seem like the number one contender, however i'd like to get a few more opinions before I make a decision. Also Robinhood seems like a favorite amongst you guys, i would just like to know which ones you all use and why.",
+    "replies": [
+      {
+        "user": "SUBJECT",
+        "time": "25-08-2015 15:56",
+        "content": "Fidelity, Interactive Brokers, optionsXpress.",
+        "replies": []
+      }
+    ]
+  }
+]
+
+Correct JSON Output (after providing your rationale):
+```json
+{
+  "intents": [
+    "INTENT: Recommending a list of stock brockers to someone that is very new to sotcks trading."
+  ]
+}
+```
+
+Wrong JSON Output:
+```json
+{
+  "intents": [
+    "INTENT: Offers brokerage recommendations in response to a request for opinions on stockbrokers."
+    # WRONG: Do not describe the communication act itself!
+    # WRONG: Missing crucial context (they are recommending to a beginner, not just anyone)
   ]
 }
 ```
