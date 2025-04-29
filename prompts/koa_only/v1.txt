@@ -15,32 +15,35 @@ Core Requirements for KOA Extraction:
 
 2.  **OUTPUT_FORMATTING (KOA Specific):**
     *   2.1: The output MUST use the specified JSON structure with ONLY the "koa" list.
-    *   2.2: Use Direct Phrasing for INFERRED MEANING: State the inferred knowledge, opinion, or attribute directly. Avoid conversational introductions like "States that...", "Expresses...", "Mentions...". Focus on the *content* of the inference.
-    *   2.3: Crucially, DO NOT embed verbatim quotes from the SUBJECT's input within the output statements. Focus entirely on the distilled semantic *meaning* or *implication* of the SUBJECT's contribution, not the specific words used. Rephrase the essence in your own words, maintaining the KOA category.
+    *   2.2: Use Direct Phrasing for INFERRED MEANING: State the inferred knowledge, opinion, or attribute directly. Avoid conversational introductions like "States that...", "Expresses...", "Mentions...". Focus on the *content* of the inference. **Specifically for ATTRIBUTE statements, ensure the statement contains the attribute itself (e.g., 'Is a student', 'Has programming experience') rather than describing the SUBJECT's behavior or communicative action (e.g., AVOID 'Expresses judgment about X').**
+    *   2.3: **CRITICAL**: No Verbatim Quotes: DO NOT embed verbatim quotes or slightly modified quotes from the SUBJECT\'s input within the output statements. Focus entirely on the distilled semantic *meaning* or *implication* of the SUBJECT\'s contribution, not the specific words used. Rephrase the essence completely in your own words, maintaining the KOA category. For instance, if the input contains "Jamison can be such a grub", do not output `OPINION: Believes Jamison behaves poorly ('is a grub') [...]` (Incorrect - includes quote). Instead, output `OPINION: Believes player Jamison sometimes behaves poorly [in the context of a specific football tackle event].` (Correct - fully rephrased).
 
 3.  **SEMANTIC_DISTILLATION (KOA Specific):**
     *   3.1: Each output statement must be semantically complete and self-contained.
-    *   3.2: Identify the minimal necessary semantic context required to fully understand the SUBJECT's demonstrated KOA. This context might come from other parts of the input (e.g., preceding messages, the original post).
-    *   3.3: Embed this necessary context directly within the statement string itself through careful phrasing or bracketed additions focused on clarification (e.g., `[regarding topic X]`, `[when addressing alternative viewpoints]`, `[in the context of financial planning]`).
-    *   3.4: **KOA CONTEXT RULE (CRITICAL):** For KOA statements (Knowledge, Opinion, Attribute), the embedded context **MUST *ONLY*** describe the *informational domain, topic, or specific subject matter* the KOA statement pertains to (e.g., "KNOWLEDGE: Understands concept Y [in the context of topic Z]", "ATTRIBUTE: Has experience [in circuit bending]"). **DO NOT, under any circumstances, use the context to describe the source, evidence, or location of the statement in the conversation (e.g., AVOID `[based on past actions]`, `[as stated in their reply]`, `[from their previous message]`, `[as evidenced by...]`).** The context **strictly** answers *WHAT* the KOA is about, never *HOW* or *WHERE* it was identified.
+    *   3.2: Identify the minimal necessary semantic context required to fully understand the SUBJECT\'s demonstrated KOA. **This is crucial for clarity.** This context might come from other parts of the input (e.g., preceding messages, the original post).
+    *   3.3: **Embed this necessary context directly within the statement string itself** through careful phrasing or bracketed additions focused on clarification (e.g., `[regarding topic X]`, `[when addressing alternative viewpoints]`, `[in the context of financial planning]`). **Ensure every KOA statement includes such clarifying context where needed.**
+    *   3.4: **KOA CONTEXT RULE (CRITICAL):** For KOA statements (Knowledge, Opinion, Attribute), the embedded context **MUST *ONLY*** describe the *informational domain, topic, or specific subject matter* the KOA statement pertains to. The context answers *WHAT* the KOA is about. **DO NOT use context to describe:**
+        *   The source/evidence/location (e.g., AVOID `[based on past actions]`, `[as stated in their reply]`, `[from their previous message]`, `[as evidenced by...]`).
+        *   *How* the knowledge/skill is applied or the specific *process* (e.g., AVOID `[through archive manipulation]`, `[by reverse engineering]`).
+        *   **Good examples focus on the domain/topic:** `[in software security]`, `[regarding LabVIEW source code protection]`, `[in circuit bending]`, `[in investing]`.\
     *   3.5: The goal is to retain full semantic nuance without needing to refer back to the original interaction log structure.
     *   3.6: Generalize Unknown Specifics: Abstract away specific entities or details that are likely unknown outside the immediate context or highly specific, *unless* that detail is essential for the core semantic meaning or the discussion is *about* that specific detail. If SUBJECT mentions 'player John Doe of the Exampletown Eagles', and 'John Doe' is likely an unknown specific but 'Exampletown Eagles' is a known entity or the essential context, the statement should refer to 'a player from the Exampletown Eagles' or generalize appropriately (e.g., 'a specific sports player'). Use generic terms like 'a specific company', 'a particular software' when the specific name adds no generalizable value or is likely unknown.
-    *   3.7: Grounded Inference: Ensure inferences are directly supported by the SUBJECT's contribution(s); avoid speculation, over-interpretation, or reading significantly beyond what the statement(s) strictly imply.
+    *   3.7: **CRITICAL**: Grounded Inference: Ensure ALL inferences (especially ATTRIBUTES and OPINIONS) are **directly and strongly supported** by the SUBJECT\'s explicit statement(s) or actions. **AVOID speculation, over-interpretation, or inferring relationships, beliefs, or attributes that are not clearly evidenced.** For example, if SUBJECT criticizes Person A's action towards Person B, DO NOT infer that SUBJECT supports Person B unless there is direct evidence for that support. Stick strictly to what the SUBJECT actually states or implies directly.
 
 4.  **ATOMICITY:**
     *   4.1: Each statement in the output list ("koa") must represent a single, distinct piece of knowledge, opinion, or attribute.
     *   4.2: If a single action by the SUBJECT demonstrates multiple distinct points (e.g., two different pieces of knowledge), generate a separate statement for each.
     *   4.3: Do not combine distinct points into one statement using 'and' or similar conjunctions, unless they are closely related and naturally flow together.
 
-5.  **IGNORE INTENT:** Do not generate any statements describing the immediate purpose or goal of the SUBJECT's action in the conversation. Focus solely on the knowledge conveyed, opinions expressed, or attributes revealed.
+5.  **IGNORE INTENT:** Do not generate any statements describing the immediate purpose or goal of the SUBJECT\'s action in the conversation. Focus solely on the knowledge conveyed, opinions expressed, or attributes revealed.
 
 KOA Framework Definitions:
 
-*   KNOWLEDGE: Statements reflecting factual understanding or know-how demonstrated by the SUBJECT that aligns with general knowledge. Must be phrased as knowledge the SUBJECT possesses. Represents a more absolute understanding. (e.g., "KNOWLEDGE: Understands the concept of capital loss in investing.")
-*   OPINION: Statements reflecting the SUBJECT's beliefs, judgments, preferences, or subjective interpretations. Must be phrased as an opinion held by the SUBJECT. Represents a more absolute belief state. (e.g., "OPINION: Believes high transaction costs are acceptable if investment quality is high.")
-*   ATTRIBUTE: Descriptions of the SUBJECT's characteristics, possessions, roles, or non-cognitive states derived directly from their statements or context. Represents more absolute traits. (e.g., "ATTRIBUTE: Identifies as a long-term investor.", "ATTRIBUTE: Uses the Robinhood platform.")
+*   KNOWLEDGE: Statements reflecting factual understanding or know-how demonstrated by the SUBJECT that aligns with general knowledge. Must be phrased as knowledge the SUBJECT possesses. Represents a more absolute understanding. (e.g., "KNOWLEDGE: Understands the concept of capital loss [in investing].")
+*   OPINION: Statements reflecting the SUBJECT\'s beliefs, judgments, preferences, or subjective interpretations. Must be phrased as an opinion held by the SUBJECT. Represents a more absolute belief state. (e.g., "OPINION: Believes high transaction costs are acceptable if investment quality is high [when evaluating investment strategies].")
+*   ATTRIBUTE: Descriptions of the SUBJECT\'s characteristics, possessions, roles, or non-cognitive states derived directly from their statements or context. State the attribute itself, not the action revealing it. Represents more absolute traits. (e.g., "ATTRIBUTE: Identifies as a long-term investor [in the context of financial planning].", "ATTRIBUTE: Uses the Robinhood platform [for stock trading].", "ATTRIBUTE: Is frustrated [with the complexity of the topic being discussed].")
 
-Example:
+Example 1:
 
 Input Raw Conversation JSON:
 ```json
@@ -48,11 +51,7 @@ Input Raw Conversation JSON:
   {
     "user": "fqn",
     "time": "26-08-2015 13:45",
-    "content": "Title: Did I miss the dip now? Or is this the "dead cat bounce"?
-Subreddit: stocks
-Body: A transfer just cleared, so now I have some money ready to buy some stocks on Robinhood. Should I hold off for a few weeks or months to see what's going to happen? Or is now a good time to buy?
-
-",
+    "content": "Title: Did I miss the dip now? Or is this the \"dead cat bounce\"?\nSubreddit: stocks\nBody: A transfer just cleared, so now I have some money ready to buy some stocks on Robinhood. Should I hold off for a few weeks or months to see what's going to happen? Or is now a good time to buy?\n\n",
     "replies": [
       {
         "user": "fqn",
@@ -83,15 +82,83 @@ Correct JSON Output (KOA ONLY):
 ```json
 {
   "koa": [
-    "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading [when evaluating the significance of low-cost platforms].",
-    "KNOWLEDGE: Understands investment transaction costs like commissions and the concept of capital loss.",
-    "KNOWLEDGE: Recognizes that investment advice must align with specific goals, distinguishing between approaches for long-term holding versus short-term profit seeking."
+    "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs [when evaluating the significance of low-cost platforms in investing/trading].",
+    "KNOWLEDGE: Understands investment transaction costs like commissions and the concept of capital loss [in investing].",
+    "KNOWLEDGE: Recognizes that investment advice must align with specific goals, distinguishing between approaches for long-term holding versus short-term profit seeking [in investing]."
   ]
 }
 ```
+
+Example 2 (Illustrating ATTRIBUTE constraint 2.2):
+
+Input Raw Conversation JSON:
+```json
+[
+  {
+    "user": "another_user",
+    "time": "10-10-2023 09:00",
+    "content": "Title: Seeking help with Python project setup\nBody: I'm having trouble installing dependencies using pipenv. Keep getting resolver errors.",
+    "replies": [
+      {
+        "user": "SUBJECT",
+        "time": "10-10-2023 09:15",
+        "content": "Ugh, pipenv dependency resolution can be such a nightmare sometimes! I've definitely been there. Have you tried clearing the cache or deleting the lockfile and regenerating?",
+        "replies": []
+      }
+    ]
+  }
+]
+```
+
+Correct JSON Output (KOA ONLY):
+```json
+{
+  "koa": [
+    "ATTRIBUTE: Has experienced similar frustrations [with Python pipenv dependency resolution].",
+    "KNOWLEDGE: Knows potential troubleshooting steps for pipenv dependency issues, such as clearing cache or regenerating the lockfile [in Python environment management]."
+  ]
+}
+```
+(Incorrect ATTRIBUTE Example for 2.2: "ATTRIBUTE: Expresses frustration [with Python pipenv dependency resolution]." - Describes the communicative action, not the attribute.)
+
+Example 3 (Illustrating Constraints 3.7 - Grounded Inference & 2.3 - No Quotes):
+
+Input Raw Conversation JSON:
+```json
+[
+ {
+  "user": "sports_fan_1",
+  "time": "12-12-2023 11:00",
+  "content": "Did you see player Jamison's tackle on Robinson yesterday? Looked really dangerous.",
+  "replies": [
+   {
+    "user": "SUBJECT",
+    "time": "12-12-2023 11:05",
+    "content": "Yeah, that was a shocker. Jamison can be such a grub sometimes.",
+    "replies": []
+   }
+  ]
+ }
+]
+```
+
+Correct JSON Output (KOA ONLY):
+```json
+{
+  "koa": [
+    "OPINION: Believes player Jamison sometimes behaves poorly [in the context of a specific football tackle event].",
+    "KNOWLEDGE: Is aware of a specific recent football event involving players Jamison and Robinson [in football]." 
+  ]
+}
+```
+(Incorrect Inference Example for 3.7: "ATTRIBUTE: Is a supporter of player Robinson [in football]." - This is UNSUPPORTED speculation. Criticizing Jamison does NOT automatically mean SUBJECT supports Robinson. Stick ONLY to what is directly stated or implied by SUBJECT's words.)
+(Incorrect Quote Example for 2.3: "OPINION: Believes Jamison behaves poorly ('is a grub') [...]." - This includes a quote. Rephrase the meaning fully.)
+
+**IMPORTANT: Before generating the final JSON output, think step-by-step about the SUBJECT's actions, the context, and how they map to the defined KOA constraints and framework. Ensure your reasoning process justifies the extracted Knowledge, Opinion, and Attribute statements.**
 
 ---
 
 BEGIN TASK
 
-Input: 
+Input:
+``` 
