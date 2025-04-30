@@ -4,9 +4,13 @@ import random
 from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
+from pydantic import BaseModel
 from tqdm.asyncio import tqdm_asyncio
 
-from user_embeddings.utils.llm.workflow_executor import _run_single_prompt
+from user_embeddings.utils.llm.workflow_executor import (
+    WorkflowStage,
+    _run_single_prompt,
+)
 
 # Import utility shared or needed by these funcs
 from user_embeddings.utils.parsing import parse_llm_json_output
@@ -99,11 +103,13 @@ async def run_judge_evaluation(
     print("Preparing judge tasks based on final workflow outputs...")
 
     for i, sample_data in enumerate(sample_workflow_results):
-        final_outputs_for_sample = sample_data.get("final_parsed_outputs", {})
+        # Access the pre-serialized judge input strings from the new key
+        final_judge_inputs_for_sample = sample_data.get("final_judge_inputs", {})
+        # Filter out any models whose final output resulted in an error string
         valid_outputs_for_judge = {
             model: output
-            for model, output in final_outputs_for_sample.items()
-            if not output.startswith("ERROR:")
+            for model, output in final_judge_inputs_for_sample.items()
+            if isinstance(output, str) and not output.startswith("ERROR:")
         }
 
         if len(valid_outputs_for_judge) > 1:
@@ -151,14 +157,16 @@ def aggregate_ranking_results(
     effective_seed: int,
     workflow_name: str,
     judge_prompt_name: str,
-    workflow: List[Dict[str, Any]],
+    workflow: List[WorkflowStage],
     available_prompts: Dict[str, Tuple[str, str]],
     debug: bool = False,
 ) -> List[Dict[str, Any]]:
     """Aggregates ranking results, including prompt versions and unmasked rationale."""
     print("Processing judge results and aggregating final data (including versions)...")
     results_data = []
-    all_task_ids_in_workflow = set(p for stage in workflow for p in stage["prompts"])
+    all_task_ids_in_workflow = set(
+        task["prompt"] for stage in workflow for task in stage.get("tasks", [])
+    )
     judge_prompt_version = available_prompts.get(judge_prompt_name, ("", "N/A"))[1]
 
     for i, sample_data in enumerate(sample_workflow_results):
@@ -248,38 +256,53 @@ def aggregate_ranking_results(
                     rank_map[model] = rank + 1
 
         model_outputs_all_tasks = sample_data.get("model_outputs", {})
-        final_parsed_outputs = sample_data.get("final_parsed_outputs", {})
-        final_merged_json = sample_data.get("final_merged_json", {})
+        final_judge_inputs = sample_data.get("final_judge_inputs", {})
 
         for model in models_to_test:
-            result_row[f"final_parsed_output_{model}"] = final_parsed_outputs.get(
+            result_row[f"final_judge_input_{model}"] = final_judge_inputs.get(
                 model, "N/A"
             )
             result_row[f"rank_{model}"] = rank_map.get(model, -1)
 
-            model_task_results = model_outputs_all_tasks.get(model, {})
+            model_exec_result = model_outputs_all_tasks.get(model, {})
+            model_raw_outputs = model_exec_result.get("raw_outputs", {})
+            model_validated_outputs = model_exec_result.get("validated_outputs", {})
+
             for task_id in all_task_ids_in_workflow:
-                col_name = f"output_{task_id}_{model}"
-                result_row[col_name] = model_task_results.get(task_id, "N/A")
+                raw_col_name = f"raw_output_{task_id}_{model}"
+                result_row[raw_col_name] = model_raw_outputs.get(task_id, "N/A")
+
+                validated_col_name = f"validated_output_{task_id}_{model}"
+                validated_data = model_validated_outputs.get(task_id)
+                if isinstance(validated_data, BaseModel):
+                    try:
+                        result_row[validated_col_name] = validated_data.model_dump_json(
+                            indent=2
+                        )
+                    except Exception:
+                        result_row[validated_col_name] = (
+                            "ERROR: Failed to dump Pydantic model"
+                        )
+                elif isinstance(validated_data, (dict, list)):
+                    try:
+                        result_row[validated_col_name] = json.dumps(
+                            validated_data, indent=2, ensure_ascii=False
+                        )
+                    except Exception:
+                        result_row[validated_col_name] = (
+                            "ERROR: Failed to serialize dict/list"
+                        )
+                elif isinstance(validated_data, str):
+                    result_row[validated_col_name] = validated_data
+                elif validated_data is None:
+                    result_row[validated_col_name] = "N/A"
+                else:
+                    result_row[validated_col_name] = (
+                        f"ERROR: Unexpected data type {type(validated_data)}"
+                    )
+
                 task_version = available_prompts.get(task_id, ("", "N/A"))[1]
                 result_row[f"version_{task_id}"] = task_version
-
-            merged_dict_for_model = final_merged_json.get(model, {})
-            if isinstance(merged_dict_for_model, dict):
-                for key, value in merged_dict_for_model.items():
-                    col_name = f"final_{key}_{model}"
-                    try:
-                        result_row[col_name] = (
-                            json.dumps(value, ensure_ascii=False)
-                            if isinstance(value, (list, dict))
-                            else str(value)
-                        )
-                    except TypeError:
-                        result_row[col_name] = "ERROR: Failed to serialize value"
-            else:
-                result_row[f"final_merged_json_error_{model}"] = (
-                    "ERROR: Merged JSON not available or not a dict"
-                )
 
         results_data.append(result_row)
 

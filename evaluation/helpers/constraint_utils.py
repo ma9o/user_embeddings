@@ -2,9 +2,13 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel
 from tqdm.asyncio import tqdm_asyncio
 
-from user_embeddings.utils.llm.workflow_executor import _run_single_prompt
+from user_embeddings.utils.llm.workflow_executor import (
+    WorkflowStage,
+    _run_single_prompt,
+)
 
 # Import utility shared or needed by these funcs
 from user_embeddings.utils.parsing import parse_llm_json_output
@@ -84,44 +88,28 @@ async def run_constraint_judge_evaluation(
     judge_model: str,
     judge_constraints_prompt_text: str,  # Renamed to clarify it's text only
 ) -> Dict[int, str]:  # Map sample index to raw judge response string
-    """Runs the constraint judge model for each sample."""
+    """Runs the constraint judge model for each sample using its final judge input."""
     # ... (Copy implementation from evaluation_utils.py) ...
     judge_tasks = []
     judge_task_metadata = []  # Store sample index
     print(f"Preparing constraint judge tasks for model '{model_to_evaluate}'...")
 
     for i, sample_data in enumerate(sample_workflow_results):
-        model_final_merged_json = sample_data.get("final_merged_json", {}).get(
-            model_to_evaluate
+        # Get the pre-serialized final output string for the specific model being evaluated
+        model_output_for_judge = sample_data.get("final_judge_inputs", {}).get(
+            model_to_evaluate, None
         )
 
-        if not isinstance(model_final_merged_json, dict) or not model_final_merged_json:
-            model_final_output_fallback = sample_data.get(
-                "final_parsed_outputs", {}
-            ).get(model_to_evaluate)
-            if (
-                model_final_output_fallback is None
-                or model_final_output_fallback.startswith("ERROR:")
-            ):
-                print(
-                    f"Skipping constraint judge for sample {i}: Neither merged JSON nor valid parsed output found for model '{model_to_evaluate}'."
-                )
-                continue
-            else:
-                print(
-                    f"Warning: Using fallback parsed output for sample {i}, model '{model_to_evaluate}' as merged JSON was invalid/missing."
-                )
-                model_output_for_judge = model_final_output_fallback
-        else:
-            try:
-                model_output_for_judge = json.dumps(
-                    model_final_merged_json, separators=(",", ":"), ensure_ascii=False
-                )
-            except TypeError as e:
-                print(
-                    f"Error serializing merged JSON for sample {i}, model '{model_to_evaluate}': {e}. Skipping."
-                )
-                continue
+        # Check if the input for the judge is valid
+        if (
+            not model_output_for_judge
+            or not isinstance(model_output_for_judge, str)
+            or model_output_for_judge.startswith("ERROR:")
+        ):
+            print(
+                f"Skipping constraint judge for sample {i}, model '{model_to_evaluate}': Invalid or missing final judge input ('{str(model_output_for_judge)[:50]}...')."
+            )
+            continue
 
         judge_prompt = create_constraint_judge_prompt(
             constraints_prompt=judge_constraints_prompt_text,
@@ -162,14 +150,17 @@ def aggregate_constraint_results(
     effective_seed: int,
     workflow_name: str,
     judge_prompt_name: str,  # Name of the constraints prompt module
-    workflow: List[Dict[str, Any]],
+    workflow: List[WorkflowStage],
     available_prompts: Dict[str, Tuple[str, str]],
 ) -> List[Dict[str, Any]]:
     """Aggregates results for the constraint violation evaluation including versions."""
     # ... (Copy implementation from evaluation_utils.py) ...
     print("Aggregating constraint evaluation results (including versions)...")
     results_data = []
-    all_task_ids_in_workflow = set(p for stage in workflow for p in stage["prompts"])
+    # Extract all unique task IDs from the new workflow structure
+    all_task_ids_in_workflow = set(
+        task["prompt"] for stage in workflow for task in stage.get("tasks", [])
+    )
 
     constraints_prompt_version = available_prompts.get(judge_prompt_name, ("", "N/A"))[
         1
@@ -179,11 +170,9 @@ def aggregate_constraint_results(
         input_context = sample_data.get("input_data", "ERROR: Input not found")
         input_length = len(input_context) if isinstance(input_context, str) else -1
 
-        final_parsed_output = sample_data.get("final_parsed_outputs", {}).get(
+        # Get the specific judge input string used for this model
+        final_judge_input = sample_data.get("final_judge_inputs", {}).get(
             model_to_evaluate, "N/A"
-        )
-        final_merged_json = sample_data.get("final_merged_json", {}).get(
-            model_to_evaluate, {}
         )
 
         judge_raw_response = judge_response_map.get(i)
@@ -210,6 +199,7 @@ def aggregate_constraint_results(
             "seed": effective_seed,
             "workflow_name": workflow_name,
             "model_evaluated": model_to_evaluate,
+            "final_judge_input": final_judge_input,
             "judge_prompt_name": judge_prompt_name,
             "constraints_prompt_version": constraints_prompt_version,
         }
@@ -217,39 +207,50 @@ def aggregate_constraint_results(
         model_outputs_all_tasks = sample_data.get("model_outputs", {}).get(
             model_to_evaluate, {}
         )
+        model_raw_outputs = model_outputs_all_tasks.get("raw_outputs", {})
+        model_validated_outputs = model_outputs_all_tasks.get("validated_outputs", {})
+
         for task_id in all_task_ids_in_workflow:
-            col_name = f"output_{task_id}_{model_to_evaluate}"
-            result_row[col_name] = model_outputs_all_tasks.get(task_id, "N/A")
+            # Raw output column
+            raw_col_name = f"raw_output_{task_id}_{model_to_evaluate}"
+            result_row[raw_col_name] = model_raw_outputs.get(task_id, "N/A")
+
+            # Validated/Processed output column (serialized)
+            validated_col_name = f"validated_output_{task_id}_{model_to_evaluate}"
+            validated_data = model_validated_outputs.get(task_id)
+            if isinstance(validated_data, BaseModel):
+                try:
+                    result_row[validated_col_name] = validated_data.model_dump_json(
+                        indent=2
+                    )
+                except Exception:
+                    result_row[validated_col_name] = (
+                        "ERROR: Failed to dump Pydantic model"
+                    )
+            elif isinstance(validated_data, (dict, list)):
+                try:
+                    result_row[validated_col_name] = json.dumps(
+                        validated_data, indent=2, ensure_ascii=False
+                    )
+                except Exception:
+                    result_row[validated_col_name] = (
+                        "ERROR: Failed to serialize dict/list"
+                    )
+            elif isinstance(validated_data, str):
+                result_row[validated_col_name] = (
+                    validated_data  # Store raw string or error string directly
+                )
+            elif validated_data is None:
+                result_row[validated_col_name] = (
+                    "N/A"  # Task might not have run or produced output
+                )
+            else:
+                result_row[validated_col_name] = (
+                    f"ERROR: Unexpected data type {type(validated_data)}"
+                )
+
             task_version = available_prompts.get(task_id, ("", "N/A"))[1]
             result_row[f"version_{task_id}"] = task_version
-
-        if isinstance(final_merged_json, dict):
-            try:
-                result_row[f"final_merged_output_{model_to_evaluate}"] = json.dumps(
-                    final_merged_json, separators=(",", ":"), ensure_ascii=False
-                )
-            except TypeError:
-                result_row[f"final_merged_output_{model_to_evaluate}"] = (
-                    "ERROR: Failed to serialize merged JSON"
-                )
-
-            for key, value in final_merged_json.items():
-                col_name = f"final_{key}_{model_to_evaluate}"
-                try:
-                    result_row[col_name] = (
-                        json.dumps(value, ensure_ascii=False)
-                        if isinstance(value, (list, dict))
-                        else str(value)
-                    )
-                except TypeError:
-                    result_row[col_name] = "ERROR: Failed to serialize value"
-        else:
-            result_row[f"final_merged_output_{model_to_evaluate}"] = (
-                "ERROR: Merged JSON not available or not a dict"
-            )
-            result_row[f"final_merged_json_error_{model_to_evaluate}"] = (
-                "ERROR: Merged JSON not available or not a dict"
-            )
 
         results_data.append(result_row)
 

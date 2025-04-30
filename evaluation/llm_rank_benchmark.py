@@ -28,7 +28,7 @@ from evaluation.helpers.ranking_utils import (
 )
 from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
 from user_embeddings.utils.llm.workflow_executor import (
-    DEFAULT_INPUT_FORMATTERS,
+    # DEFAULT_INPUT_FORMATTERS no longer needed
     validate_workflow,
 )
 
@@ -47,10 +47,10 @@ project_root = Path(__file__).resolve().parent.parent
 # --- Script-Specific Default Configuration ---
 DEFAULT_MODELS_TO_TEST = [
     # "deepseek/deepseek-r1-distill-llama-70b",
-    "deepseek/deepseek-chat-v3-0324",
-    "deepseek/deepseek-r1",
+    # "deepseek/deepseek-chat-v3-0324",
+    # "deepseek/deepseek-r1",
+    # "google/gemini-2.5-flash-preview",
     "google/gemma-3-27b-it",
-    "google/gemini-2.5-flash-preview",
     "x-ai/grok-3-mini-beta",
 ]
 # DEFAULT_JUDGE_MODEL, DEFAULT_NUM_SAMPLES, DEFAULT_SEED are now in config.py
@@ -97,12 +97,12 @@ async def main():
 
     # --- Validate Workflow using the imported function ---
     # Use imported AVAILABLE_PROMPTS
+    # Also pass available_output_models for validation of parsable tasks
     is_valid = validate_workflow(
         workflow_name=selected_workflow_name,
         workflow_definition=selected_workflow,
         available_prompts=AVAILABLE_PROMPTS,
-        available_formatters=DEFAULT_INPUT_FORMATTERS,  # Use imported default formatters
-        # Pass the output models for validation if needed within the validator (optional extension)
+        available_output_models=AVAILABLE_OUTPUT_MODELS,
     )
     if not is_valid:
         print("Workflow validation failed. Exiting.")
@@ -112,14 +112,19 @@ async def main():
     judge_prompt_module_name = args.judge_prompt_module
     if not judge_prompt_module_name:
         last_stage = selected_workflow[-1]
-        if len(last_stage["prompts"]) == 1:
-            judge_prompt_module_name = last_stage["prompts"][0]
+        # Determine the *single* task ID from the last stage if possible
+        # This logic assumes the ranking judge needs the output of a single final task.
+        # If multiple final tasks exist, the judge prompt logic might need adjustment
+        # or a specific final task needs to be designated for judging.
+        final_stage_tasks = last_stage.get("tasks", [])
+        if len(final_stage_tasks) == 1:
+            judge_prompt_module_name = final_stage_tasks[0]["prompt"]
             print(
                 f"Judge prompt not specified, defaulting to: '{judge_prompt_module_name}'"
             )
         else:
             print(
-                "Error: --judge-prompt-module is required when the workflow's final stage has multiple prompts."
+                "Error: --judge-prompt-module is required when the workflow's final stage does not have exactly one task."
             )
             return
     # Use imported AVAILABLE_PROMPTS
@@ -194,19 +199,19 @@ async def main():
     # Pass the imported workflow definition, available prompts, and formatters
     # Use imported AVAILABLE_PROMPTS, AVAILABLE_OUTPUT_MODELS
     sample_workflow_results = await run_and_parse_test_models(
-        sample_df,
-        args.models,
-        selected_workflow,
-        AVAILABLE_PROMPTS,
-        DEFAULT_INPUT_FORMATTERS,  # Pass the default formatters
-        AVAILABLE_OUTPUT_MODELS,  # Pass the output model mapping
+        sample_df=sample_df,
+        models_to_test=args.models,
+        workflow=selected_workflow,
+        available_prompts=AVAILABLE_PROMPTS,
+        available_output_models=AVAILABLE_OUTPUT_MODELS,  # Pass models for executor use
     )
 
     # 3. Run Judge Model Evaluation
     # Pass the single judge instruction prompt
-    # Use args.judge_model from common_args
+    # Note: The judge now receives a serialized JSON string (or error) as input
+    # from run_and_parse_test_models (via 'final_judge_inputs' key)
     judge_response_map = await run_judge_evaluation(
-        sample_workflow_results,  # Updated results structure from workflow run
+        sample_workflow_results,  # Contains 'final_judge_inputs'
         args.judge_model,
         judge_instruction_prompt_text,  # Pass only the text
     )

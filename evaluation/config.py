@@ -1,13 +1,15 @@
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# Import workflow utilities - needed for WORKFLOWS type hint
-from user_embeddings.utils.llm.workflow_executor import PromptStage
+from pydantic import BaseModel
 
-# Import teacher prompts - needed for AVAILABLE_PROMPTS and WORKFLOWS
+# Import workflow utilities - needed for WORKFLOWS type hint
+from user_embeddings.utils.llm.workflow_executor import WorkflowStage
 from user_embeddings.utils.teacher_prompts import (
     all_in_one as all_in_one_module,
 )
+
+# Import teacher prompts - needed for AVAILABLE_PROMPTS and WORKFLOWS
 from user_embeddings.utils.teacher_prompts import (
     inference as inference_module,
 )
@@ -24,78 +26,67 @@ from user_embeddings.utils.teacher_prompts import (
 # from user_embeddings.utils.teacher_prompts import koa_only as koa_only_module
 # from user_embeddings.utils.teacher_prompts.deprecated import inference, separation
 
+# Import potential separation model if defined (assuming it exists)
+try:
+    from user_embeddings.utils.teacher_prompts.deprecated import (
+        separation as separation_module,
+    )
+except ImportError:
+    separation_module = None  # Handle case where it might not exist
+    print(
+        "Warning: separation_module not found, workflows using 'separation' might fail validation."
+    )
+
 # --- Shared Prompt Mapping --- (Now includes version)
 # Used by both llm_rank_benchmark and prompt_adherence
 # Stores tuple: (prompt_text, prompt_version)
 AVAILABLE_PROMPTS: Dict[str, Tuple[str, str]] = {
-    "all_in_one": (all_in_one_module.PROMPT, all_in_one_module.VERSION),
     "inference": (inference_module.PROMPT, inference_module.VERSION),
     # "separation": (separation_module.PROMPT, separation_module.VERSION),
     "intent_only": (intent_only_module.PROMPT, intent_only_module.VERSION),
     "koa_only": (koa_only_module.PROMPT, koa_only_module.VERSION),
+    "all_in_one": (all_in_one_module.PROMPT, all_in_one_module.VERSION),
     # Add any NEW prompts here, ensuring they export PROMPT and VERSION
     # e.g., "constraint_checker_v1": (constraint_checker_v1.PROMPT, constraint_checker_v1.VERSION),
 }
 
 # --- Shared Pydantic Output Model Mapping ---
 # Used by run_and_parse_test_models in both scripts
-AVAILABLE_OUTPUT_MODELS: Dict[str, type] = {
+AVAILABLE_OUTPUT_MODELS: Dict[str, type[BaseModel]] = {
     "koa_only": koa_only_module.PromptOutput,
     "intent_only": intent_only_module.PromptOutput,
-    # Add other models here if they are defined and used in workflows
-    # "separation": separation_module.PromptOutput,
-    # " inference": inference_module.PromptOutput,
-    # "all_in_one": all_in_one_module.PromptOutput,
+    "inference": inference_module.PromptOutput,
+    "all_in_one": all_in_one_module.PromptOutput,
 }
+
+# Add separation model if it exists and has PromptOutput
+if separation_module and hasattr(separation_module, "PromptOutput"):
+    AVAILABLE_OUTPUT_MODELS["separation"] = separation_module.PromptOutput
 
 # --- Shared Workflow Definitions ---
 # Used by both llm_rank_benchmark and prompt_adherence
-WORKFLOWS: Dict[str, List[PromptStage]] = {
+WORKFLOWS: Dict[str, List[WorkflowStage]] = {
     "serial_separation_inference": [
-        {
-            "stage": 1,
-            "prompts": ["separation"],
-            "input_from": None,
-            "input_formatter": None,
-        },
-        {
-            "stage": 2,
-            "prompts": ["inference"],
-            "input_from": ["separation"],
-            "input_formatter": "format_single_input",
-        },
+        {"stage": 1, "tasks": [{"prompt": "separation", "input_from": None}]},
+        {"stage": 2, "tasks": [{"prompt": "inference", "input_from": ["separation"]}]},
     ],
     "concurrent_intent_koa": [
         {
             "stage": 1,
-            "prompts": ["intent_only", "koa_only"],
-            "input_from": None,
-            "input_formatter": None,
+            "tasks": [
+                {"prompt": "intent_only", "input_from": None},
+                {"prompt": "koa_only", "input_from": None},
+            ],
         },
     ],
     "single_all_in_one": [
-        {
-            "stage": 1,
-            "prompts": ["all_in_one"],
-            "input_from": None,
-            "input_formatter": None,
-        }
+        {"stage": 1, "tasks": [{"prompt": "all_in_one", "input_from": None}]}
     ],
     "single_intent_only": [
-        {
-            "stage": 1,
-            "prompts": ["intent_only"],
-            "input_from": None,
-            "input_formatter": None,
-        }
+        {"stage": 1, "tasks": [{"prompt": "intent_only", "input_from": None}]}
     ],
     "inference_only": [
-        {
-            "stage": 1,
-            "prompts": ["inference"],
-            "input_from": None,
-            "input_formatter": None,
-        }
+        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": None}]}
     ],
     # Add other common workflows here
 }

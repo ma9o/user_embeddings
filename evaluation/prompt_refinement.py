@@ -35,7 +35,7 @@ from evaluation.helpers.refiner_utils import (
 )
 from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
 from user_embeddings.utils.llm.workflow_executor import (
-    DEFAULT_INPUT_FORMATTERS,  # Shared
+    # DEFAULT_INPUT_FORMATTERS no longer needed
     validate_workflow,  # Shared
 )
 
@@ -124,7 +124,7 @@ async def main():
         workflow_name=selected_workflow_name,
         workflow_definition=selected_workflow,
         available_prompts=AVAILABLE_PROMPTS,
-        available_formatters=DEFAULT_INPUT_FORMATTERS,
+        available_output_models=AVAILABLE_OUTPUT_MODELS,  # Pass for validation
     )
     if not is_valid:
         print("Workflow validation failed. Exiting.")
@@ -218,16 +218,17 @@ async def main():
     print(
         f"Running workflow '{selected_workflow_name}' for model '{args.model_to_evaluate}' on the single sample..."
     )
+    # Note: run_and_parse_test_models now passes AVAILABLE_OUTPUT_MODELS to the executor
     sample_workflow_results = await run_and_parse_test_models(
         sample_df,
         [args.model_to_evaluate],  # Single model
         selected_workflow,
         AVAILABLE_PROMPTS,
-        DEFAULT_INPUT_FORMATTERS,
         AVAILABLE_OUTPUT_MODELS,
     )
 
     # --- Run Constraint Judge ---
+    # Note: run_constraint_judge_evaluation receives results containing 'final_judge_inputs'
     judge_response_map = await run_constraint_judge_evaluation(
         sample_workflow_results=sample_workflow_results,  # List containing one sample result
         model_to_evaluate=args.model_to_evaluate,

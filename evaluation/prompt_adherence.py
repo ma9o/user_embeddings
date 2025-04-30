@@ -31,7 +31,7 @@ from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_
 
 # Import workflow utilities
 from user_embeddings.utils.llm.workflow_executor import (
-    DEFAULT_INPUT_FORMATTERS,  # Shared
+    # DEFAULT_INPUT_FORMATTERS no longer needed
     validate_workflow,  # Shared
 )
 
@@ -82,11 +82,12 @@ async def main():
 
     # --- Validate Workflow --- (Reused)
     # Use imported AVAILABLE_PROMPTS
+    # Also pass available_output_models for validation
     is_valid = validate_workflow(
         workflow_name=selected_workflow_name,
         workflow_definition=selected_workflow,
         available_prompts=AVAILABLE_PROMPTS,
-        available_formatters=DEFAULT_INPUT_FORMATTERS,
+        available_output_models=AVAILABLE_OUTPUT_MODELS,
     )
     if not is_valid:
         print("Workflow validation failed. Exiting.")
@@ -167,18 +168,19 @@ async def main():
     print(
         f"Running workflow '{selected_workflow_name}' for model '{args.model_to_evaluate}'..."
     )
+    # Note: run_and_parse_test_models now passes AVAILABLE_OUTPUT_MODELS to the executor
     # Use imported AVAILABLE_PROMPTS, AVAILABLE_OUTPUT_MODELS
     sample_workflow_results = await run_and_parse_test_models(
         sample_df,
         [args.model_to_evaluate],  # IMPORTANT: Pass only the single model here
         selected_workflow,
         AVAILABLE_PROMPTS,
-        DEFAULT_INPUT_FORMATTERS,
         AVAILABLE_OUTPUT_MODELS,
     )
 
     # 3. Run Constraint Judge Model Evaluation (New helper)
-    # Use args.judge_model from common_args
+    # Note: run_constraint_judge_evaluation now receives results containing
+    # 'final_judge_inputs' which holds the serialized output of the model to evaluate.
     judge_response_map = await run_constraint_judge_evaluation(
         sample_workflow_results=sample_workflow_results,
         model_to_evaluate=args.model_to_evaluate,
