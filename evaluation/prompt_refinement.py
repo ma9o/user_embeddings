@@ -52,7 +52,11 @@ DEFAULT_EVAL_MODEL = "x-ai/grok-3-mini-beta"
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(
-    description="""Evaluate a single LLM's output against constraints for a *single* sample, appending results.     
+    description="""Supports *iterative prompt refinement* by evaluating a single LLM's output against constraints for *one sample* at a time, appending results.
+    
+    Use this script repeatedly: examine violations, update prompts (workflow & judge), and rerun. 
+    The script reuses the *same sample* if violations occurred previously (unless a seed is forced), otherwise picks a new one. 
+    See help text below for detailed workflow example. Utilizes Dask.
 
 This script can be used iteratively for prompt refinement. For example, to refine the 'all_in_one' prompt:
 1. Run: `python -m evaluation.prompt_refinement --workflow concurrent_intent_koa --judge-prompt-module all_in_one`

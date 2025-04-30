@@ -54,7 +54,7 @@ DEFAULT_RANK_OUTPUT_SUBDIR = "llm_rank_results"
 
 # --- Argument Parser (Unchanged) ---
 parser = argparse.ArgumentParser(
-    description="Evaluate LLM outputs based on a defined workflow (Dask version)."
+    description="Benchmarks and ranks *multiple* LLMs based on their performance on a specified workflow. Runs each model through the workflow on sampled data, uses a judge LLM to rank the outputs for each sample, and aggregates results into a leaderboard. Utilizes Dask for parallel execution."
 )
 add_common_eval_args(parser, default_output_subdir=DEFAULT_RANK_OUTPUT_SUBDIR)
 parser.add_argument(

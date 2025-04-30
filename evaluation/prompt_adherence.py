@@ -54,7 +54,7 @@ DEFAULT_ADHERENCE_OUTPUT_SUBDIR = "constraint_test_results"  # Specific subdir
 
 # --- Argument Parser --- (Adapted for constraint evaluation)
 parser = argparse.ArgumentParser(
-    description="Evaluate a single LLM's output against a set of constraints."
+    description="Evaluates a *single* specified LLM's adherence to a set of constraints defined in a judge prompt. It runs the target LLM through a workflow on sampled data and then uses a judge LLM to check the output against the constraints, reporting violations."
 )
 
 # Add common arguments
