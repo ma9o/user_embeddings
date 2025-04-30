@@ -1,12 +1,12 @@
-import asyncio
+import asyncio  # Added back
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from tqdm.asyncio import tqdm_asyncio
-
-from user_embeddings.utils.llm.workflow_executor import _run_single_prompt
-
-# Import utility shared or needed by these funcs
+# from tqdm.asyncio import tqdm_asyncio # Removed
+# Import the async LLM runner
+from user_embeddings.utils.llm.get_text_completion import (
+    get_text_completion,  # Direct import
+)
 from user_embeddings.utils.parsing import parse_llm_json_output
 
 # --- Constraint Specific Helpers ---
@@ -76,114 +76,98 @@ def parse_constraint_judge_output(judge_response: str) -> Optional[Dict[str, str
     return violations_dict  # Return the dictionary (possibly empty)
 
 
-async def run_constraint_judge_evaluation(
-    sample_workflow_results: List[
-        Dict[str, Any]
-    ],  # Output from run_and_parse_test_models
+# Internal async helper (same as in ranking_utils)
+async def _run_single_judge_llm_async(model_name: str, prompt: str) -> str:
+    """Async helper to run a single judge LLM call."""
+    try:
+        result = await get_text_completion(model_name, prompt)
+        return result
+    except Exception as e:
+        print(f"Error running judge model {model_name}: {e}")
+        return f"ERROR: Judge model execution failed - {e}"
+
+
+# Refactored to be synchronous
+def run_constraint_judge_evaluation(
+    # Expects the structure prepared *after* dask compute & judge prep
+    # List[Dict{'input_data': str, 'judge_inputs': {model: str}, 'detailed_model_outputs': ...}]
+    sample_data_list: List[Dict[str, Any]],
     model_to_evaluate: str,  # The single model being judged
     judge_model: str,
-    judge_constraints_prompt_text: str,  # Renamed to clarify it's text only
+    judge_constraints_prompt_text: str,
 ) -> Dict[int, str]:  # Map sample index to raw judge response string
-    """Runs the constraint judge model for each sample."""
-    # ... (Copy implementation from evaluation_utils.py) ...
-    judge_tasks = []
-    judge_task_metadata = []  # Store sample index
+    """Runs the constraint judge model synchronously for each sample."""
+    judge_prompts_with_meta = []  # Store (index, prompt) tuples
     print(f"Preparing constraint judge tasks for model '{model_to_evaluate}'...")
 
-    for i, sample_data in enumerate(sample_workflow_results):
-        model_final_merged_json = sample_data.get("final_merged_json", {}).get(
+    for i, sample_data in enumerate(sample_data_list):
+        model_output_for_judge = sample_data.get("judge_inputs", {}).get(
             model_to_evaluate
         )
-
-        if not isinstance(model_final_merged_json, dict) or not model_final_merged_json:
-            model_final_output_fallback = sample_data.get(
-                "final_parsed_outputs", {}
-            ).get(model_to_evaluate)
-            if (
-                model_final_output_fallback is None
-                or model_final_output_fallback.startswith("ERROR:")
-            ):
-                print(
-                    f"Skipping constraint judge for sample {i}: Neither merged JSON nor valid parsed output found for model '{model_to_evaluate}'."
-                )
-                continue
-            else:
-                print(
-                    f"Warning: Using fallback parsed output for sample {i}, model '{model_to_evaluate}' as merged JSON was invalid/missing."
-                )
-                model_output_for_judge = model_final_output_fallback
-        else:
-            try:
-                model_output_for_judge = json.dumps(
-                    model_final_merged_json, separators=(",", ":"), ensure_ascii=False
-                )
-            except TypeError as e:
-                print(
-                    f"Error serializing merged JSON for sample {i}, model '{model_to_evaluate}': {e}. Skipping."
-                )
-                continue
+        if model_output_for_judge is None or model_output_for_judge.startswith(
+            "ERROR:"
+        ):
+            print(
+                f"Skipping constraint judge for sample {i}: No valid prepared output found..."
+            )
+            continue
 
         judge_prompt = create_constraint_judge_prompt(
             constraints_prompt=judge_constraints_prompt_text,
             input_data=sample_data["input_data"],
             model_output=model_output_for_judge,
         )
+        judge_prompts_with_meta.append((i, judge_prompt))
 
-        task = asyncio.create_task(_run_single_prompt(judge_model, judge_prompt))
-        judge_tasks.append(task)
-        judge_task_metadata.append({"sample_index": i})
-
-    judge_responses_raw = []
-    if judge_tasks:
+    judge_response_map: Dict[int, str] = {}
+    if judge_prompts_with_meta:
         print(
-            f"Running {len(judge_tasks)} constraint judge tasks concurrently for model '{model_to_evaluate}'..."
+            f"Running {len(judge_prompts_with_meta)} constraint judge tasks for model '{model_to_evaluate}'..."
         )
-        judge_responses_raw = await tqdm_asyncio.gather(
-            *judge_tasks, desc=f"Running Constraint Judge ({judge_model})", unit="task"
-        )
+        # Run tasks one by one using asyncio.run
+        # This is simpler than managing dask compute for these helpers
+        for index, prompt in judge_prompts_with_meta:
+            try:
+                # Call the async helper using asyncio.run
+                raw_response = asyncio.run(
+                    _run_single_judge_llm_async(judge_model, prompt)
+                )
+                judge_response_map[index] = raw_response
+            except Exception as e:
+                print(f"Error running judge task for sample index {index}: {e}")
+                judge_response_map[index] = f"ERROR: Judge execution failed - {e}"
+        print("Constraint judge tasks complete.")
     else:
         print("No constraint judge tasks to run.")
-
-    judge_response_map: Dict[int, str] = {}  # Map sample_index -> raw judge response
-    for i, raw_response in enumerate(judge_responses_raw):
-        meta = judge_task_metadata[i]
-        sample_index = meta["sample_index"]
-        judge_response_map[sample_index] = raw_response
 
     return judge_response_map
 
 
+# aggregate_constraint_results needs adjustment to accept the new input format
 def aggregate_constraint_results(
-    sample_workflow_results: List[
-        Dict[str, Any]
-    ],  # Output from run_and_parse_test_models
-    judge_response_map: Dict[int, str],  # Output from run_constraint_judge_evaluation
+    # Expects the structure prepared *after* dask compute & judge prep
+    # List[Dict{'input_data': str, 'judge_inputs': {model: str}, 'detailed_model_outputs': {model: {task_id: TaskResult}}}]
+    processed_results_list: List[Dict[str, Any]],
+    judge_response_map: Dict[int, str],
     model_to_evaluate: str,
     effective_seed: int,
     workflow_name: str,
-    judge_prompt_name: str,  # Name of the constraints prompt module
-    workflow: List[Dict[str, Any]],
-    available_prompts: Dict[str, Tuple[str, str]],
+    judge_prompt_name: str,
+    # workflow: List[Dict[str, Any]], # Not strictly needed
+    # available_prompts: Dict[str, Tuple[str, str]], # Not needed
 ) -> List[Dict[str, Any]]:
-    """Aggregates results for the constraint violation evaluation including versions."""
-    # ... (Copy implementation from evaluation_utils.py) ...
-    print("Aggregating constraint evaluation results (including versions)...")
+    """Aggregates results for the constraint violation evaluation."""
+    print("Aggregating constraint evaluation results...")
     results_data = []
-    all_task_ids_in_workflow = set(p for stage in workflow for p in stage["prompts"])
+    # constraints_prompt_version = available_prompts.get(judge_prompt_name, ("", "N/A"))[1] # Removed dependency
 
-    constraints_prompt_version = available_prompts.get(judge_prompt_name, ("", "N/A"))[
-        1
-    ]
-
-    for i, sample_data in enumerate(sample_workflow_results):
+    for i, sample_data in enumerate(processed_results_list):
         input_context = sample_data.get("input_data", "ERROR: Input not found")
         input_length = len(input_context) if isinstance(input_context, str) else -1
 
-        final_parsed_output = sample_data.get("final_parsed_outputs", {}).get(
-            model_to_evaluate, "N/A"
-        )
-        final_merged_json = sample_data.get("final_merged_json", {}).get(
-            model_to_evaluate, {}
+        # Get the prepared output string that was sent to the judge
+        judged_output_str = sample_data.get("judge_inputs", {}).get(
+            model_to_evaluate, "ERROR: Judged output missing"
         )
 
         judge_raw_response = judge_response_map.get(i)
@@ -196,14 +180,15 @@ def aggregate_constraint_results(
         result_row: Dict[str, Any] = {
             "input": input_context,
             "input_length": input_length,
+            "model_output_judged": judged_output_str,  # Store what was actually judged
             "judge_raw_output": judge_raw_response
             if judge_raw_response
             else "Judge Skipped/Failed",
             "violated_constraints": json.dumps(violated_constraints_dict)
             if violated_constraints_dict is not None
-            else "ERROR: Parse Failed"
-            if judge_raw_response
-            else "Judge Skipped/Failed",
+            else (
+                "ERROR: Parse Failed" if judge_raw_response else "Judge Skipped/Failed"
+            ),
             "violation_count": len(violated_constraints_dict)
             if violated_constraints_dict is not None
             else -1,
@@ -211,45 +196,19 @@ def aggregate_constraint_results(
             "workflow_name": workflow_name,
             "model_evaluated": model_to_evaluate,
             "judge_prompt_name": judge_prompt_name,
-            "constraints_prompt_version": constraints_prompt_version,
+            # "constraints_prompt_version": constraints_prompt_version, # Removed
         }
 
-        model_outputs_all_tasks = sample_data.get("model_outputs", {}).get(
+        # Add detailed task outputs if needed
+        model_detailed_outputs = sample_data.get("detailed_model_outputs", {}).get(
             model_to_evaluate, {}
         )
-        for task_id in all_task_ids_in_workflow:
-            col_name = f"output_{task_id}_{model_to_evaluate}"
-            result_row[col_name] = model_outputs_all_tasks.get(task_id, "N/A")
-            task_version = available_prompts.get(task_id, ("", "N/A"))[1]
-            result_row[f"version_{task_id}"] = task_version
-
-        if isinstance(final_merged_json, dict):
-            try:
-                result_row[f"final_merged_output_{model_to_evaluate}"] = json.dumps(
-                    final_merged_json, separators=(",", ":"), ensure_ascii=False
-                )
-            except TypeError:
-                result_row[f"final_merged_output_{model_to_evaluate}"] = (
-                    "ERROR: Failed to serialize merged JSON"
-                )
-
-            for key, value in final_merged_json.items():
-                col_name = f"final_{key}_{model_to_evaluate}"
-                try:
-                    result_row[col_name] = (
-                        json.dumps(value, ensure_ascii=False)
-                        if isinstance(value, (list, dict))
-                        else str(value)
-                    )
-                except TypeError:
-                    result_row[col_name] = "ERROR: Failed to serialize value"
-        else:
-            result_row[f"final_merged_output_{model_to_evaluate}"] = (
-                "ERROR: Merged JSON not available or not a dict"
-            )
-            result_row[f"final_merged_json_error_{model_to_evaluate}"] = (
-                "ERROR: Merged JSON not available or not a dict"
-            )
+        # Consider which specific task outputs are valuable to log here.
+        # For now, let's skip adding all intermediate task outputs unless requested.
+        # for task_id, task_result in model_detailed_outputs.items():
+        #     col_name_raw = f"raw_output_{task_id}_{model_to_evaluate}"
+        #     result_row[col_name_raw] = task_result.get("raw_output", "N/A")
+        #     # Add parsed or error if needed
 
         results_data.append(result_row)
 

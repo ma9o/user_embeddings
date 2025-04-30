@@ -1,14 +1,17 @@
-import asyncio
-import json
+# import asyncio # Removed
 import random
 from typing import Any, Dict, List, Optional, Tuple
 
+import dask  # Added
 import polars as pl
-from tqdm.asyncio import tqdm_asyncio
 
-from user_embeddings.utils.llm.workflow_executor import _run_single_prompt
-
-# Import utility shared or needed by these funcs
+# from tqdm.asyncio import tqdm_asyncio # Removed
+# Import the async LLM runner, assuming it's still needed for the judge
+# If workflow_executor._run_single_prompt is removed/changed, adapt this import
+# We might need direct access to get_text_completion if _run_single_prompt changes
+from user_embeddings.utils.llm.get_text_completion import (
+    get_text_completion,  # Direct import might be safer
+)
 from user_embeddings.utils.parsing import parse_llm_json_output
 
 # --- Ranking Specific Helpers ---
@@ -88,48 +91,82 @@ def parse_judge_output(
     return ranking, rationale, any_correct
 
 
-async def run_judge_evaluation(
-    sample_workflow_results: List[Dict[str, Any]],
+# Internal async helper for judge call (used by synchronous wrapper)
+async def _run_single_judge_llm_async(model_name: str, prompt: str) -> str:
+    """Async helper to run a single judge LLM call."""
+    try:
+        # Assuming get_text_completion handles initialization or it's done globally
+        result = await get_text_completion(model_name, prompt)
+        return result
+    except Exception as e:
+        print(f"Error running judge model {model_name}: {e}")
+        return f"ERROR: Judge model execution failed - {e}"
+
+
+# Refactored to be synchronous
+def run_judge_evaluation(
+    # Expects the structure prepared *after* dask compute
+    # List[Dict{'input_data': str, 'judge_inputs': {model: str}, 'detailed_model_outputs': ...}]
+    judge_ready_results: List[Dict[str, Any]],
     judge_model: str,
     judge_instruction_prompt_text: str,
-) -> Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]]:
-    """Runs the ranking judge model for each sample where multiple valid outputs exist."""
-    judge_tasks = []
+) -> Dict[
+    int, Tuple[str, Dict[str, str], Dict[str, str]]
+]:  # Map sample index -> (raw_resp, mask_map, orig_map)
+    """Runs the ranking judge model synchronously for each sample."""
+    judge_tasks_to_compute = []
     judge_task_metadata = []
-    print("Preparing judge tasks based on final workflow outputs...")
+    print("Preparing judge tasks (will run synchronously or via Dask compute)...")
 
-    for i, sample_data in enumerate(sample_workflow_results):
-        final_outputs_for_sample = sample_data.get("final_parsed_outputs", {})
-        valid_outputs_for_judge = {
-            model: output
-            for model, output in final_outputs_for_sample.items()
-            if not output.startswith("ERROR:")
-        }
+    for i, sample_data in enumerate(judge_ready_results):
+        # judge_ready_results contains 'judge_inputs' map: {model_name: judge_input_string}
+        # For ranking, we need all model outputs for *one* sample to be judged together.
+        # The structure passed should reflect this. Assuming judge_inputs contains *all* model outputs for the judge.
 
-        if len(valid_outputs_for_judge) > 1:
-            judge_prompt, mask_map, original_map = create_judge_prompt(
-                judge_instruction_prompt_text,
-                sample_data["input_data"],
-                valid_outputs_for_judge,
-            )
-            task = asyncio.create_task(
-                _run_single_prompt(judge_model, judge_prompt)
-            )  # Uses helper
-            judge_tasks.append(task)
-            judge_task_metadata.append(
-                {"sample_index": i, "mask_map": mask_map, "original_map": original_map}
-            )
-        else:
+        # Let's rethink the input structure. We need the outputs for different models for the *same* sample input.
+        # The current `judge_ready_results` structure seems correct for this.
+        # `sample_data` here is one element of that list.
+
+        valid_outputs_for_judge = sample_data.get(
+            "judge_inputs"
+        )  # This should map model->output_string
+        if (
+            not isinstance(valid_outputs_for_judge, dict)
+            or len(valid_outputs_for_judge) < 2
+        ):
             print(
-                f"Skipping judge task for sample {i} due to insufficient valid final outputs ({len(valid_outputs_for_judge)} found)."
+                f"Skipping judge task for sample {i} due to insufficient valid final outputs ({len(valid_outputs_for_judge or {})} found in judge_inputs)."
             )
+            continue
+
+        # Create the blinded prompt
+        judge_prompt, mask_map, original_map = create_judge_prompt(
+            judge_instruction_prompt_text,
+            sample_data["input_data"],
+            valid_outputs_for_judge,  # Pass the prepared {model: output_str} map
+        )
+
+        # Use dask.delayed to represent the async call
+        # This allows Dask to manage the async execution if desired later,
+        # but we'll compute it synchronously here for simplicity.
+        delayed_call = dask.delayed(_run_single_judge_llm_async)(
+            judge_model, judge_prompt
+        )
+        judge_tasks_to_compute.append(delayed_call)
+
+        judge_task_metadata.append(
+            {"sample_index": i, "mask_map": mask_map, "original_map": original_map}
+        )
 
     judge_responses_raw = []
-    if judge_tasks:
-        print(f"Running {len(judge_tasks)} judge tasks concurrently...")
-        judge_responses_raw = await tqdm_asyncio.gather(
-            *judge_tasks, desc="Running Judge Models", unit="task"
-        )
+    if judge_tasks_to_compute:
+        print(f"Running {len(judge_tasks_to_compute)} judge tasks...")
+        # Compute the delayed tasks synchronously using dask.compute
+        # We could use the distributed client here too if preferred.
+        judge_responses_raw = dask.compute(
+            *judge_tasks_to_compute, scheduler="sync"
+        )  # Use sync scheduler for local run
+        print("Judge tasks complete.")
     else:
         print("No judge tasks to run.")
 
@@ -144,24 +181,27 @@ async def run_judge_evaluation(
     return judge_response_map
 
 
+# aggregate_ranking_results needs adjustment to accept the new input format
 def aggregate_ranking_results(
-    sample_workflow_results: List[Dict[str, Any]],
+    # Expects the structure prepared *after* dask compute & judge input prep
+    # List[Dict{'input_data': str, 'judge_inputs': {model: str}, 'detailed_model_outputs': {model: {task_id: TaskResult}}}]
+    processed_results_list: List[Dict[str, Any]],
     judge_response_map: Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]],
-    models_to_test: List[str],
-    effective_seed: int,
+    models: List[str],
+    seed: int,
     workflow_name: str,
     judge_prompt_name: str,
-    workflow: List[Dict[str, Any]],
-    available_prompts: Dict[str, Tuple[str, str]],
+    # workflow: List[Dict[str, Any]], # Not strictly needed if using detailed_model_outputs
+    # available_prompts: Dict[str, Tuple[str, str]], # Not needed if detailed_model_outputs has versions?
     debug: bool = False,
 ) -> List[Dict[str, Any]]:
     """Aggregates ranking results, including prompt versions and unmasked rationale."""
-    print("Processing judge results and aggregating final data (including versions)...")
+    print("Processing judge results and aggregating final data...")
     results_data = []
-    all_task_ids_in_workflow = set(p for stage in workflow for p in stage["prompts"])
-    judge_prompt_version = available_prompts.get(judge_prompt_name, ("", "N/A"))[1]
+    # Assume prompt versions are not easily accessible here, need to reconsider if needed
+    # judge_prompt_version = available_prompts.get(judge_prompt_name, ("", "N/A"))[1]
 
-    for i, sample_data in enumerate(sample_workflow_results):
+    for i, sample_data in enumerate(processed_results_list):
         judge_data = judge_response_map.get(i)
         ranking_masked, rationale, any_correct = (None, None, None)
         mask_to_original_map = None
@@ -178,21 +218,23 @@ def aggregate_ranking_results(
             )
 
         ranking_original = None
-        expected_models_in_judge_input = set()
-        if mask_to_original_map:
-            expected_models_in_judge_input = set(mask_to_original_map.values())
-            if ranking_masked:
-                try:
-                    ranking_original = [
-                        mask_to_original_map[masked]
-                        for masked in ranking_masked
-                        if masked in mask_to_original_map
-                    ]
-                    if len(ranking_original) != len(expected_models_in_judge_input):
-                        print(f"Warning: Judge ranking length mismatch for sample {i}.")
-                except KeyError as e:
-                    print(f"Error translating ranking for sample {i}: {e}")
-                    ranking_original = None
+        if mask_to_original_map and ranking_masked:
+            try:
+                ranking_original = [
+                    mask_to_original_map[masked]
+                    for masked in ranking_masked
+                    if masked in mask_to_original_map
+                ]
+                expected_models_in_judge_input = set(mask_to_original_map.values())
+                if len(ranking_original) != len(expected_models_in_judge_input):
+                    print(
+                        f"Warning: Judge ranking length mismatch for sample {i}. Judge saw {len(expected_models_in_judge_input)} models, ranked {len(ranking_original)}."
+                    )
+            except KeyError as e:
+                print(
+                    f"Error translating ranking for sample {i}: Mask '{e}' not found in map."
+                )
+                ranking_original = None
 
         input_context = sample_data.get("input_data", "ERROR: Input not found")
         input_length = len(input_context) if isinstance(input_context, str) else -1
@@ -224,62 +266,46 @@ def aggregate_ranking_results(
         result_row: Dict[str, Any] = {
             "judge_raw_output": judge_raw_response
             if judge_raw_response
-            else "ERROR: Judge response not parsed"
-            if judge_data
             else "Judge Skipped/Failed",
             "input": input_context,
             "input_length": input_length,
             "judge_rationale": unmasked_rationale
             if unmasked_rationale
-            else "ERROR: Rationale not parsed"
-            if judge_data
-            else "Judge Skipped/Failed",
-            "judge_any_correct": any_correct if any_correct is not None else "ERROR",
-            "seed": effective_seed,
+            else (
+                "ERROR: Rationale missing/unmask failed"
+                if judge_data
+                else "Judge Skipped/Failed"
+            ),
+            "judge_any_correct": any_correct
+            if any_correct is not None
+            else ("ERROR: Parse failed" if judge_data else "Judge Skipped/Failed"),
+            "seed": seed,
             "workflow_name": workflow_name,
             "judge_prompt_name": judge_prompt_name,
-            "judge_prompt_version": judge_prompt_version,
+            # "judge_prompt_version": judge_prompt_version, # Reconsider how to get this if needed
         }
 
-        rank_map = {model: -1 for model in models_to_test}
+        rank_map = {model: -1 for model in models}
         if ranking_original:
             for rank, model in enumerate(ranking_original):
                 if model in rank_map:
                     rank_map[model] = rank + 1
 
-        model_outputs_all_tasks = sample_data.get("model_outputs", {})
-        final_parsed_outputs = sample_data.get("final_parsed_outputs", {})
-        final_merged_json = sample_data.get("final_merged_json", {})
+        # Add individual model ranks and raw/parsed outputs if available
+        detailed_outputs = sample_data.get("detailed_model_outputs", {})
+        for model in models:
+            result_row[f"rank_{model}"] = rank_map.get(
+                model, -1
+            )  # Rank or -1 if not ranked/present
+            model_results = detailed_outputs.get(model, {})  # {task_id: TaskResult}
 
-        for model in models_to_test:
-            result_row[f"final_parsed_output_{model}"] = final_parsed_outputs.get(
+            # Extract final task output(s) for this model (assuming logic similar to judge prep)
+            # This part is tricky without the workflow definition readily available
+            # Let's just store the prepared judge input string for now
+            result_row[f"output_{model}"] = sample_data.get("judge_inputs", {}).get(
                 model, "N/A"
             )
-            result_row[f"rank_{model}"] = rank_map.get(model, -1)
-
-            model_task_results = model_outputs_all_tasks.get(model, {})
-            for task_id in all_task_ids_in_workflow:
-                col_name = f"output_{task_id}_{model}"
-                result_row[col_name] = model_task_results.get(task_id, "N/A")
-                task_version = available_prompts.get(task_id, ("", "N/A"))[1]
-                result_row[f"version_{task_id}"] = task_version
-
-            merged_dict_for_model = final_merged_json.get(model, {})
-            if isinstance(merged_dict_for_model, dict):
-                for key, value in merged_dict_for_model.items():
-                    col_name = f"final_{key}_{model}"
-                    try:
-                        result_row[col_name] = (
-                            json.dumps(value, ensure_ascii=False)
-                            if isinstance(value, (list, dict))
-                            else str(value)
-                        )
-                    except TypeError:
-                        result_row[col_name] = "ERROR: Failed to serialize value"
-            else:
-                result_row[f"final_merged_json_error_{model}"] = (
-                    "ERROR: Merged JSON not available or not a dict"
-                )
+            # TODO: Revisit if detailed outputs per task are needed in final CSV
 
         results_data.append(result_row)
 
