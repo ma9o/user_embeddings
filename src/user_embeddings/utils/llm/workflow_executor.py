@@ -8,6 +8,12 @@ import polars as pl
 from dask import delayed
 from pydantic import BaseModel, ValidationError
 
+from evaluation.helpers.constraint_utils import build_constraint_judge_graph
+
+# Import judge graph builders (if they are in accessible paths)
+# Assuming they are now importable
+from evaluation.helpers.ranking_utils import build_ranking_judge_graph
+
 # from tqdm.asyncio import tqdm_asyncio # No longer needed
 from user_embeddings.utils.parsing import parse_llm_json_output
 
@@ -298,19 +304,13 @@ def _process_output_dask(
 
 def build_dask_workflow_graph(
     model_name: str,
+    # Pass initial_input directly, not delayed, as it's static for this workflow instance
     initial_input: str,
     workflow: List[WorkflowStage],
     available_prompts: Dict[str, Tuple[str, str]],
     available_output_models: Dict[str, Type[BaseModel]],
 ) -> Dict[str, dask.delayed]:
-    """
-    Builds the Dask computation graph for a single workflow execution.
-    Does NOT execute the workflow, only defines the delayed tasks.
-
-    Returns:
-        A dictionary mapping task_id to its corresponding Dask delayed object
-        representing the final TaskResult for that task.
-    """
+    """Builds the Dask graph for the main workflow tasks ONLY."""
     # Stores the delayed object representing the TaskResult for each task_id
     delayed_task_results: Dict[str, dask.delayed] = {}
     # Stores delayed objects representing the *raw inputs* needed for _prepare_task_input_dask
@@ -395,18 +395,21 @@ def build_dask_workflow_graph(
     return delayed_task_results
 
 
-# Renamed: orchestrates graph building over samples/models
-def build_full_dask_graph(
+def build_full_evaluation_graph(
     sample_df: pl.DataFrame,
     models_to_test: List[str],
     workflow: List[WorkflowStage],
     available_prompts: Dict[str, Tuple[str, str]],
     available_output_models: Dict[str, Type[BaseModel]],
     input_column: str = "formatted_context",
+    # Arguments needed for judging
+    judge_type: Optional[str] = None,  # 'ranking' or 'constraint'
+    judge_model: Optional[str] = None,
+    judge_prompt_text: Optional[str] = None,  # Instruction/Constraint prompt text
+    constraint_model_to_evaluate: Optional[str] = None,  # Only for constraint judge
 ) -> List[Dict[str, Any]]:
     """
-    Builds the complete Dask graph for running a workflow across multiple samples and models.
-    Returns a structure containing Dask delayed objects, NOT computed results.
+    Builds the complete Dask graph including workflow tasks AND judge tasks.
 
     Args:
         sample_df: Polars DataFrame with input data.
@@ -415,47 +418,153 @@ def build_full_dask_graph(
         available_prompts: Map of prompt names to (prompt text, version).
         available_output_models: Map of task_ids to their Pydantic output model.
         input_column: The column name in sample_df containing the initial input.
+        judge_type: Type of judge to add ('ranking' or 'constraint').
+        judge_model: The model to use for judging.
+        judge_prompt_text: The specific instruction or constraint prompt text for the judge.
+        constraint_model_to_evaluate: The specific model being evaluated (for constraint judge).
 
     Returns:
         A list of dictionaries, one per sample. Each dictionary contains:
-            'input_data': The initial input string for the sample.
-            'model_outputs': A dict mapping model_name -> delayed_results_dict, where
-                             delayed_results_dict maps task_id: dask.delayed[TaskResult].
+            'input_data': Delayed object for the initial input string.
+            'workflow_outputs': Dict mapping model_name -> {task_id: dask.delayed[TaskResult]}.
+            'judge_results': Dict mapping judge_key -> dask.delayed[judge_result] (structure depends on judge type).
+                                For ranking: judge_key='ranking_judge', value=dict from build_ranking_judge_graph
+                                For constraint: judge_key=model_evaluated, value=dict from build_constraint_judge_graph
     """
     results_structure: List[Dict[str, Any]] = []
-    print("Building Dask computation graph for all samples and models...")
+    print("Building FULL Dask computation graph (Workflow + Judge)...")
 
     if input_column not in sample_df.columns:
         raise ValueError(f"Input column '{input_column}' not found in DataFrame.")
 
-    # Validate the workflow definition once before starting
+    if judge_type and not judge_model:
+        raise ValueError("judge_model is required if judge_type is specified.")
+    if judge_type and not judge_prompt_text:
+        raise ValueError("judge_prompt_text is required if judge_type is specified.")
+    if judge_type == "constraint" and not constraint_model_to_evaluate:
+        raise ValueError(
+            "constraint_model_to_evaluate is required for constraint judge."
+        )
+
+    # Validate the main workflow definition once
     if not validate_workflow("Main Workflow", workflow, available_prompts):
         raise ValueError("Workflow validation failed. Please check errors above.")
 
     for i, row in enumerate(sample_df.iter_rows(named=True)):
         initial_input_data = row[input_column]
-        sample_output = {"input_data": initial_input_data, "model_outputs": {}}
+        # Make input data delayed as well, needed by judge graph builders
+        input_data_delayed = delayed(initial_input_data)
+
+        sample_output = {
+            "input_data": input_data_delayed,  # Store delayed input
+            "workflow_outputs": {},
+            "judge_results": {},
+        }
+
+        # Build workflow graph for all models for this sample
+        final_workflow_outputs_for_judge: Dict[str, dask.delayed] = {}
         for model in models_to_test:
-            # Build the graph for this specific sample and model
-            delayed_results_dict: Dict[str, dask.delayed] = build_dask_workflow_graph(
+            # Build main workflow graph for this model & sample
+            model_workflow_graph = build_dask_workflow_graph(
                 model_name=model,
-                initial_input=initial_input_data,
+                initial_input=initial_input_data,  # Pass raw string here
                 workflow=workflow,
                 available_prompts=available_prompts,
                 available_output_models=available_output_models,
             )
-            sample_output["model_outputs"][model] = delayed_results_dict
+            sample_output["workflow_outputs"][model] = model_workflow_graph
+
+            # Identify the final output(s) needed for the judge
+            # This assumes the judge needs the *final* result(s) of the workflow.
+            # We need a way to extract the correct TaskResult delayed obj (raw/parsed).
+            # For simplicity, let's assume the judge needs the raw output of the *last* task(s).
+            # TODO: Improve logic to select correct input for judge (raw/parsed based on availability/need)
+            final_stage_num = max(stage["stage"] for stage in workflow)
+            final_task_ids_for_model = []
+            for stage in workflow:
+                if stage["stage"] == final_stage_num:
+                    final_task_ids_for_model.extend(
+                        [task["task_id"] for task in stage["tasks"]]
+                    )
+
+            # Assuming judge needs a single string - take first final task if multiple?
+            # This part needs careful design based on judge requirements.
+            if final_task_ids_for_model:
+                final_task_id = final_task_ids_for_model[0]  # Get the target task ID
+                # Check if the delayed object for this task exists *before* trying to use it
+                if final_task_id in model_workflow_graph:
+                    final_task_result_delayed = model_workflow_graph[final_task_id]
+                    # Extract the raw_output string from the TaskResult dict (delayed)
+                    # Prefer parsed output if available and serializable?
+                    # Use RAW_OUTPUT_KEY directly in the lambda
+                    final_output_str_delayed = delayed(
+                        lambda res: res.get(RAW_OUTPUT_KEY, "ERROR")
+                    )(final_task_result_delayed)
+                    final_workflow_outputs_for_judge[model] = final_output_str_delayed
+                else:
+                    # The final task ID was identified but not found in the built graph (shouldn't happen if valid)
+                    final_workflow_outputs_for_judge[model] = delayed(
+                        f"ERROR: Final task {final_task_id} not found in graph"
+                    )
+            else:
+                final_workflow_outputs_for_judge[model] = delayed(
+                    "ERROR: No final tasks found in workflow"
+                )
+
+        # Build judge graph segment if requested
+        if judge_type == "ranking":
+            if len(final_workflow_outputs_for_judge) >= 2:
+                judge_graph_segment = build_ranking_judge_graph(
+                    input_data_delayed=input_data_delayed,
+                    model_outputs_delayed=final_workflow_outputs_for_judge,  # Pass {model: delayed_str}
+                    judge_model=judge_model,
+                    judge_instruction_prompt_text=judge_prompt_text,
+                )
+                sample_output["judge_results"]["ranking_judge"] = judge_graph_segment
+            else:
+                sample_output["judge_results"]["ranking_judge"] = {
+                    "judge_raw_output": delayed(
+                        "Judge Skipped - Insufficient models/outputs for ranking"
+                    ),
+                    # ... add other keys with delayed(None) ...
+                }
+
+        elif judge_type == "constraint":
+            model_to_judge = constraint_model_to_evaluate
+            if model_to_judge in final_workflow_outputs_for_judge:
+                judge_graph_segment = build_constraint_judge_graph(
+                    model_output_delayed=final_workflow_outputs_for_judge[
+                        model_to_judge
+                    ],
+                    input_data_delayed=input_data_delayed,
+                    judge_model=judge_model,
+                    judge_constraints_prompt_text=judge_prompt_text,
+                )
+                # Store constraint judge results under the evaluated model's name
+                sample_output["judge_results"][model_to_judge] = judge_graph_segment
+            else:
+                sample_output["judge_results"][model_to_judge] = {
+                    "judge_raw_output": delayed(
+                        f"Judge Skipped - Output for model {model_to_judge} not found"
+                    ),
+                    # ... add other keys with delayed(None) ...
+                }
 
         results_structure.append(sample_output)
 
-    print(
-        f"Dask graph built for {len(sample_df)} samples and {len(models_to_test)} models."
-    )
+    print(f"Full Dask graph built for {len(sample_df)} samples.")
     return results_structure
+
+
+# Deprecate the old build_full_dask_graph (renamed)
+def build_full_dask_graph(*args, **kwargs):
+    raise DeprecationWarning(
+        "build_full_dask_graph is deprecated. Use build_full_evaluation_graph."
+    )
 
 
 # Note: The caller (e.g., prompt_refinement.py) will now be responsible for:
 # 1. Initializing a Dask client (e.g., Client())
-# 2. Calling build_full_dask_graph to get the structure of delayed objects.
+# 2. Calling build_full_evaluation_graph to get the structure of delayed objects.
 # 3. Calling client.compute(results_structure) or dask.compute(results_structure)
 #    to trigger execution and get the actual results back in the same structure.

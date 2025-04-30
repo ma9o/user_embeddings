@@ -20,7 +20,6 @@ from evaluation.helpers.common_args import (  # Import common args helper
 )
 from evaluation.helpers.constraint_utils import (
     aggregate_constraint_results,
-    run_constraint_judge_evaluation,
 )
 
 # Import shared and specific helpers
@@ -36,8 +35,8 @@ from evaluation.helpers.refiner_utils import (
 from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_client
 from user_embeddings.utils.llm.workflow_executor import (
     # DEFAULT_INPUT_FORMATTERS, # Removed
-    build_full_dask_graph,  # New graph builder
-    validate_workflow,  # Validation still useful
+    build_full_evaluation_graph,  # Use this now
+    validate_workflow,
 )
 
 load_dotenv()
@@ -116,10 +115,8 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Initialize Dask Client ---
-    # Using a local client. Adjust if using a distributed cluster.
     print("Initializing Dask client...")
-    # Use try-finally to ensure client closes
-    client = Client()  # threads_per_worker=1 might be useful if tasks are GIL-bound
+    client = Client()
     print(f"Dask dashboard link: {client.dashboard_link}")
 
     try:
@@ -140,13 +137,7 @@ def main():
         )
 
         # Validate workflow structure before building graph
-        is_valid = validate_workflow(
-            workflow_name=selected_workflow_name,
-            workflow_definition=selected_workflow,
-            available_prompts=AVAILABLE_PROMPTS,
-            # available_formatters removed
-        )
-        if not is_valid:
+        if not validate_workflow("Main Workflow", selected_workflow, AVAILABLE_PROMPTS):
             print("Workflow validation failed. Exiting.")
             return
 
@@ -226,123 +217,50 @@ def main():
             print("Error: Failed to load the single sample.")
             return
 
-        # --- Build Dask Graph --- (Does not execute yet)
+        # --- Build Full Dask Graph (Workflow + Judge) --- (Does not execute yet)
         print(
-            f"Building Dask graph for workflow '{selected_workflow_name}', model '{args.model_to_evaluate}' ..."
+            f"Building FULL Dask graph for workflow '{selected_workflow_name}', model '{args.model_to_evaluate}' ..."
         )
-        # build_full_dask_graph returns the structure with delayed objects
-        # Structure: List[Dict{'input_data': str, 'model_outputs': {model: {task_id: dask.delayed}}}]
-        graph_structure = build_full_dask_graph(
+        # Call the new function, including judge parameters
+        graph_structure = build_full_evaluation_graph(
             sample_df=sample_df,  # Single sample DataFrame
             models_to_test=[args.model_to_evaluate],
             workflow=selected_workflow,
             available_prompts=AVAILABLE_PROMPTS,
             available_output_models=AVAILABLE_OUTPUT_MODELS,
-            input_column="formatted_context",  # Assuming this column exists
+            input_column="formatted_context",
+            # Judge specific args for constraint evaluation
+            judge_type="constraint",
+            judge_model=args.judge_model,
+            judge_prompt_text=judge_constraints_prompt_text,
+            constraint_model_to_evaluate=args.model_to_evaluate,
         )
 
         # --- Execute Dask Graph ---
-        print("Computing Dask graph...")
-        # dask.compute executes the graph based on dependencies
-        # It returns a tuple containing results for each argument passed via *.
-        # Since graph_structure is a list containing one dict (for one sample),
-        # the result will be a tuple containing one element: that dict.
+        print("Computing Dask graph (including judge tasks)...")
+        # Structure: List[Dict{'input_data': delayed, 'workflow_outputs': ..., 'judge_results': ...}]
         computed_result_tuple = dask.compute(*graph_structure, scheduler="distributed")
-        # Check if the result tuple is empty or does not contain the expected dictionary
         if not computed_result_tuple or not isinstance(computed_result_tuple[0], dict):
             print(
                 "Error: Dask computation did not return the expected results structure (dict for single sample)."
             )
             print(f"Received: {computed_result_tuple}")
             return
-        # Extract the single sample result dictionary
-        single_computed_sample = computed_result_tuple[0]
+        # Assign the computed result for the single sample
+        computed_sample_result = computed_result_tuple[0]
+        print("Dask computation complete.")
 
-        # --- Prepare Judge Inputs (from computed results) ---
-        # TODO: Refactor or verify run_and_prepare_judge_inputs to accept pre-computed results.
-        # For now, assume it's adapted or we process inline:
-        # Remove the check here as we have the single sample already
-        # if not computed_results:
-        #     print("Error: Dask computation returned no results.")
-        #     return
-        # single_computed_sample = computed_results[0] # Already assigned
+        # --- Prepare Judge Inputs (No longer needed inline) ---
+        # The judge results are now computed as part of the graph.
 
-        # Manually prepare judge input here for simplicity for now:
-        # This replicates logic from run_and_prepare_judge_inputs
-        final_stage_num = max(stage["stage"] for stage in selected_workflow)
-        final_task_ids = []
-        for stage in selected_workflow:
-            if stage["stage"] == final_stage_num:
-                final_task_ids.extend([task["task_id"] for task in stage["tasks"]])
+        # --- Run Constraint Judge (No longer needed separately) ---
 
-        model_computed_results = single_computed_sample["model_outputs"].get(
-            args.model_to_evaluate, {}
-        )
-        final_outputs_for_judge = {}
-        any_error_in_final = False
-        for task_id in final_task_ids:
-            result = model_computed_results.get(task_id)
-            # ... (rest of the judge input preparation logic from evaluation_utils) ...
-            if result is None:
-                error_detail = "Result missing"
-                any_error_in_final = True
-            elif result.get("error"):
-                error_detail = result["error"]
-                any_error_in_final = True
-            elif result.get("parsed_output") is not None:
-                try:
-                    error_detail = json.dumps(
-                        result["parsed_output"], indent=2, ensure_ascii=False
-                    )
-                except TypeError:
-                    error_detail = "ERROR: Failed to serialize parsed output"
-                    any_error_in_final = True
-            else:
-                error_detail = result.get("raw_output", "").strip()
-            final_outputs_for_judge[task_id] = error_detail
-        # ... (logic to combine into judge_input_string) ...
-        if any_error_in_final:
-            judge_input_string = "ERROR: Final task(s) failed."
-        elif len(final_outputs_for_judge) == 1:
-            judge_input_string = list(final_outputs_for_judge.values())[0]
-        else:
-            judge_input_string = "\n---\n".join(
-                f"Output from {tid}:\n{out}"
-                for tid, out in sorted(final_outputs_for_judge.items())
-            )
-
-        # Create the structure expected by run_constraint_judge_evaluation
-        judge_eval_input = [
-            {
-                "input_data": single_computed_sample["input_data"],
-                "judge_inputs": {args.model_to_evaluate: judge_input_string},
-                # Include detailed outputs if needed by downstream aggregation
-                "detailed_model_outputs": single_computed_sample["model_outputs"],
-            }
-        ]
-
-        # --- Run Constraint Judge ---
-        # This function likely needs to be adapted to handle the Dask computed results structure
-        # and potentially become synchronous or wrapped for Dask if it performs long computation.
-        # Assuming it remains async for now, but called synchronously after dask compute.
-        print("Running constraint judge...")
-        # We need an event loop to run this if it's still async
-        # judge_response_map = asyncio.run(run_constraint_judge_evaluation(...))
-        # OR refactor run_constraint_judge_evaluation to be synchronous.
-        # Let's assume it's refactored to be synchronous or wrapped.
-        judge_response_map = run_constraint_judge_evaluation(
-            sample_data_list=judge_eval_input,  # Pass prepared input
-            model_to_evaluate=args.model_to_evaluate,
-            judge_model=args.judge_model,
-            judge_constraints_prompt_text=judge_constraints_prompt_text,
-        )
-        # TODO: Adapt run_constraint_judge_evaluation if it was async.
-
-        # --- Aggregate Results ---
+        # --- Aggregate Results --- (Operates on the fully computed result)
         print("Aggregating results...")
         results_data = aggregate_constraint_results(
-            processed_results_list=judge_eval_input,  # Pass the same structure used for judging
-            judge_response_map=judge_response_map,
+            # Pass the list containing the single computed result dict
+            computed_results_list=[computed_sample_result],
+            # judge_response_map is no longer needed as input, judge results are inside computed_sample_result
             model_to_evaluate=args.model_to_evaluate,
             effective_seed=effective_seed,
             workflow_name=selected_workflow_name,

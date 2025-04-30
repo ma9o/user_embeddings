@@ -1,5 +1,4 @@
 import argparse
-import json
 
 # import asyncio # Removed
 import time
@@ -27,8 +26,7 @@ from evaluation.helpers.evaluation_utils import (
 from evaluation.helpers.filename_utils import generate_eval_filename
 from evaluation.helpers.ranking_utils import (
     aggregate_ranking_results,
-    calculate_and_print_leaderboard,
-    run_judge_evaluation,  # Needs judge logic
+    calculate_and_print_leaderboard,  # Needs judge logic
 )
 
 # Initialize LLM client
@@ -37,7 +35,7 @@ from user_embeddings.utils.llm.get_text_completion import initialize_openrouter_
 # Import Dask-based workflow executor
 from user_embeddings.utils.llm.workflow_executor import (
     # DEFAULT_INPUT_FORMATTERS, # Removed
-    build_full_dask_graph,  # New graph builder
+    build_full_evaluation_graph,  # Use this now
     validate_workflow,
 )
 
@@ -176,108 +174,52 @@ def main():
         if sample_df is None:
             return
 
-        # 2. Build Dask Graph for Test Models
+        # 2. Build Full Dask Graph (Workflow + Ranking Judge)
         print(
-            f"Building Dask graph for {len(args.models)} models and {args.num_samples} samples..."
+            f"Building FULL Dask graph for {len(args.models)} models and {args.num_samples} samples..."
         )
-        graph_structure = build_full_dask_graph(
+        graph_structure = build_full_evaluation_graph(
             sample_df=sample_df,
             models_to_test=args.models,
             workflow=selected_workflow,
             available_prompts=AVAILABLE_PROMPTS,
             available_output_models=AVAILABLE_OUTPUT_MODELS,
             input_column="formatted_context",
+            # Judge specific args for ranking evaluation
+            judge_type="ranking",
+            judge_model=args.judge_model,
+            judge_prompt_text=judge_instruction_prompt_text,
+            # constraint_model_to_evaluate is not needed for ranking
         )
 
         # 3. Execute Dask Graph
-        print("Computing Dask graph...")
-        # Structure: List[Dict{'input_data': str, 'model_outputs': {model: {task_id: TaskResult}}}]
-        computed_results = dask.compute(*graph_structure, scheduler="distributed")[0]
-        # futures = client.compute(graph_structure); progress(futures); computed_results = client.gather(futures)
+        print("Computing Dask graph (including ranking judge tasks)...")
+        # Structure: List[Dict{'input_data': delayed, 'workflow_outputs': ..., 'judge_results': ...}]
+        computed_result_tuple = dask.compute(*graph_structure, scheduler="distributed")
+        # Check result structure (expecting a tuple containing one list)
+        if not computed_result_tuple or not isinstance(computed_result_tuple[0], list):
+            print(
+                "Error: Dask computation did not return the expected results structure (list of samples)."
+            )
+            print(f"Received: {computed_result_tuple}")
+            return
+        computed_results_list = computed_result_tuple[0]
         print("Dask computation complete.")
 
-        # 4. Prepare Judge Inputs (from computed results)
-        # This step might need adaptation in run_and_prepare_judge_inputs or inline processing
-        # Assume run_and_prepare_judge_inputs handles the computed_results structure
-        print("Preparing judge inputs from computed results...")
-        # TODO: Verify/adapt run_and_prepare_judge_inputs if necessary
-        # It needs to iterate through the computed_results list
-        judge_ready_results = []
-        for computed_sample in computed_results:
-            # Simplified inline preparation for now
-            final_stage_num = max(stage["stage"] for stage in selected_workflow)
-            final_task_ids = []
-            for stage in selected_workflow:
-                if stage["stage"] == final_stage_num:
-                    final_task_ids.extend([task["task_id"] for task in stage["tasks"]])
+        # 4. Prepare Judge Inputs (No longer needed inline) ---
 
-            judge_inputs_for_sample = {}
-            for model in args.models:
-                model_computed_results = computed_sample["model_outputs"].get(model, {})
-                final_outputs_for_judge = {}
-                any_error_in_final = False
-                for task_id in final_task_ids:
-                    result = model_computed_results.get(task_id)
-                    # ... (judge input preparation logic as in prompt_refinement) ...
-                    if result is None:
-                        error_detail = "Result missing"
-                        any_error_in_final = True
-                    elif result.get("error"):
-                        error_detail = result["error"]
-                        any_error_in_final = True
-                    elif result.get("parsed_output") is not None:
-                        try:
-                            error_detail = json.dumps(
-                                result["parsed_output"], indent=2, ensure_ascii=False
-                            )
-                        except TypeError:
-                            error_detail = "ERROR: Failed to serialize parsed output"
-                            any_error_in_final = True
-                    else:
-                        error_detail = result.get("raw_output", "").strip()
-                    final_outputs_for_judge[task_id] = error_detail
-                # ... (logic to combine into judge_input_string) ...
-                if any_error_in_final:
-                    judge_input_string = "ERROR: Final task(s) failed."
-                elif len(final_outputs_for_judge) == 1:
-                    judge_input_string = list(final_outputs_for_judge.values())[0]
-                else:
-                    judge_input_string = "\n---\n".join(
-                        f"Output from {tid}:\n{out}"
-                        for tid, out in sorted(final_outputs_for_judge.items())
-                    )
-                judge_inputs_for_sample[model] = judge_input_string
+        # 5. Run Judge Model Evaluation (No longer needed separately) ---
 
-            judge_ready_results.append(
-                {
-                    "input_data": computed_sample["input_data"],
-                    "judge_inputs": judge_inputs_for_sample,
-                    "detailed_model_outputs": computed_sample["model_outputs"],
-                }
-            )
-
-        # 5. Run Judge Model Evaluation
-        # This helper might also need adaptation if it was async.
-        # Assuming it's synchronous or wrapped.
-        print("Running judge model evaluation...")
-        judge_response_map = run_judge_evaluation(
-            judge_ready_results,  # Pass the prepared results
-            args.judge_model,
-            judge_instruction_prompt_text,
-        )
-        # TODO: Adapt run_judge_evaluation if it was async.
-
-        # 6. Aggregate Final Results
+        # 6. Aggregate Final Results (Operates on fully computed results)
         print("Aggregating final results...")
         results_data = aggregate_ranking_results(
-            processed_results_list=judge_ready_results,  # Pass prepared judge results
-            judge_response_map=judge_response_map,
+            # Pass the list of computed result dicts
+            computed_results_list=computed_results_list,
+            # judge_response_map is no longer needed here
             models=args.models,
             seed=effective_seed,
             workflow_name=selected_workflow_name,
             judge_prompt_name=judge_prompt_module_name,
-            # workflow=selected_workflow, # May not be needed
-            # available_prompts=AVAILABLE_PROMPTS, # May not be needed
             debug=args.debug,
         )
         results_df = pl.DataFrame(results_data)

@@ -59,10 +59,11 @@ def determine_effective_seed(provided_seed: int | None, output_file_path: Path) 
                     )
                     return effective_seed
                 else:
+                    # Return the seed directly as read from the file
                     print(
                         f"Last run (seed {last_seed}) had {last_violation_count} violation(s). Reusing seed: {last_seed}"
                     )
-                    return last_seed  # Return the reused seed
+                    return last_seed  # Reverted: Return seed as read
             else:
                 raise RuntimeError(
                     f"Output file '{output_file_path}' exists but is empty or contains no data rows. Cannot determine seed from previous run. Please provide a seed or ensure the file has valid data."
