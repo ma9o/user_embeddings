@@ -50,6 +50,7 @@ DEFAULT_MODELS_TO_TEST = [
     # "deepseek/deepseek-chat-v3-0324",
     # "deepseek/deepseek-r1",
     # "google/gemini-2.5-flash-preview",
+    "meta-llama/llama-4-maverick",
     "google/gemma-3-27b-it",
     "x-ai/grok-3-mini-beta",
 ]

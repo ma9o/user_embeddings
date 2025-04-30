@@ -47,8 +47,8 @@ NUM_SAMPLES = 1
 
 # --- Script-Specific Default Configuration ---
 # DEFAULT_EVAL_MODEL = "google/gemma-3-27b-it"
-# DEFAULT_EVAL_MODEL = "google/gemini-2.5-flash-preview"
-DEFAULT_EVAL_MODEL = "x-ai/grok-3-mini-beta"
+DEFAULT_EVAL_MODEL = "google/gemini-2.5-flash-preview"
+# DEFAULT_EVAL_MODEL = "x-ai/grok-3-mini-beta"
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(

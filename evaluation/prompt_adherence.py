@@ -48,7 +48,16 @@ project_root = Path(__file__).resolve().parent.parent
 # WORKFLOWS = { ... }
 
 # --- Script-Specific Default Configuration ---
-DEFAULT_EVAL_MODEL = "google/gemma-3-27b-it"
+# DEFAULT_MODELS_TO_TEST = [
+#     "deepseek/deepseek-r1-distill-llama-70b",
+#     "deepseek/deepseek-chat-v3-0324",
+#     "deepseek/deepseek-r1",
+#     "google/gemini-2.5-flash-preview",
+#     "meta-llama/llama-4-maverick",
+#     "google/gemma-3-27b-it",
+#     "x-ai/grok-3-mini-beta",
+# ]
+DEFAULT_EVAL_MODEL = "meta-llama/llama-4-maverick"
 # DEFAULT_JUDGE_MODEL, DEFAULT_NUM_SAMPLES, DEFAULT_SEED are now in config.py
 DEFAULT_ADHERENCE_OUTPUT_SUBDIR = "constraint_test_results"  # Specific subdir
 
