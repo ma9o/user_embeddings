@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import json
 import time
 from pathlib import Path
 
@@ -56,8 +57,10 @@ project_root = Path(__file__).resolve().parent.parent
 #     "meta-llama/llama-4-maverick",
 #     "google/gemma-3-27b-it",
 #     "x-ai/grok-3-mini-beta",
+#     "qwen/qwen3-32b",
+#     "qwen/qwen3-30b-a3b"
 # ]
-DEFAULT_EVAL_MODEL = "meta-llama/llama-4-maverick"
+DEFAULT_EVAL_MODEL = "qwen/qwen3-32b"
 # DEFAULT_JUDGE_MODEL, DEFAULT_NUM_SAMPLES, DEFAULT_SEED are now in config.py
 DEFAULT_ADHERENCE_OUTPUT_SUBDIR = "constraint_test_results"  # Specific subdir
 
@@ -235,65 +238,62 @@ async def main():
         # Optional: Print top N most common violations if needed
         if "violated_constraints" in results_df.columns and num_samples_judged > 0:
             try:
-                # Filter for rows where violations were found and successfully parsed
-                violation_dicts_df = results_df.filter(
+                # Define a helper function to safely parse JSON and extract keys
+                def safe_get_keys(json_string):
+                    if not isinstance(json_string, str) or not json_string.startswith(
+                        "{"
+                    ):
+                        return []  # Return empty list if not a string or doesn't look like JSON dict
+                    try:
+                        data = json.loads(json_string)
+                        if isinstance(data, dict):
+                            return list(data.keys())
+                        else:
+                            return []  # Return empty list if JSON is not a dictionary
+                    except json.JSONDecodeError:
+                        return []  # Return empty list if JSON parsing fails
+
+                # Filter rows with potential violations
+                violations_df = results_df.filter(
                     (pl.col("violation_count") > 0)
-                    & (
-                        pl.col("violated_constraints").str.starts_with("{")
-                    )  # Check for dict start
-                ).select(
-                    pl.col("violated_constraints")
-                    .str.json_decode()  # Decode JSON string to struct
-                    .alias("violations_dict")
+                    & pl.col("violated_constraints").is_not_null()
                 )
 
-                # Check if the column is indeed a struct after decoding
-                if not isinstance(
-                    violation_dicts_df["violations_dict"].dtype, pl.Struct
-                ):
-                    print(
-                        "Warning: Column 'violations_dict' is not a Struct after JSON decoding. Skipping violation analysis."
+                # Apply the safe key extraction function using map_elements
+                keys_df = violations_df.select(
+                    pl.col("violated_constraints")
+                    .map_elements(
+                        safe_get_keys,
+                        return_dtype=pl.List(pl.String),
+                        skip_nulls=False,  # Process nulls within the function
                     )
-                    all_violation_ids = pl.DataFrame(
-                        {"violation_id": []}, schema={"violation_id": pl.String}
-                    )  # Empty DF with correct schema
-                elif violation_dicts_df.is_empty():
-                    print("No rows with valid violation dictionaries found.")
-                    all_violation_ids = pl.DataFrame(
-                        {"violation_id": []}, schema={"violation_id": pl.String}
-                    )
-                else:
-                    # Extract keys (violation IDs) from each dictionary/struct using map_elements
-                    all_violation_ids = (
-                        violation_dicts_df.select(
-                            pl.col("violations_dict")
-                            # Apply lambda to get keys, handle potential non-dict elements gracefully
-                            .map_elements(
-                                lambda d: list(d.keys()) if isinstance(d, dict) else [],
-                                return_dtype=pl.List(pl.String),
-                            )
-                            .alias("violation_id_list")
-                        )
-                        .explode("violation_id_list")
-                        .rename({"violation_id_list": "violation_id"})
-                    )
+                    .alias("violation_id_list")
+                )
 
-                # Proceed only if all_violation_ids DataFrame is not empty and has the column
+                # Explode the lists of keys into individual rows
+                all_violation_ids = (
+                    keys_df.explode("violation_id_list")
+                    .rename({"violation_id_list": "violation_id"})
+                    .filter(
+                        pl.col("violation_id").is_not_null()
+                    )  # Filter out nulls from failed parses/empty lists
+                )
+
+                # Proceed only if we have extracted violation IDs
                 if (
                     not all_violation_ids.is_empty()
                     and "violation_id" in all_violation_ids.columns
                 ):
+                    # Perform value counts on the Series of violation IDs
                     violation_counts = (
-                        all_violation_ids.filter(pl.col("violation_id").is_not_null())[
-                            "violation_id"
-                        ]  # Filter nulls just in case
+                        all_violation_ids["violation_id"]  # Select the Series
                         .value_counts()
                         .sort("count", descending=True)
                     )
                     print("\nMost Common Violations:")
                     print(violation_counts.head(10))
                 else:
-                    # This case covers initial empty df, parsing failures, or empty key lists
+                    # This case covers initial empty df, parsing failures, empty key lists, or no actual violations found
                     print(
                         "No specific violation details could be extracted or parsed from results."
                     )
