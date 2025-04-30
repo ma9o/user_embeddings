@@ -46,8 +46,9 @@ project_root = Path(__file__).resolve().parent.parent
 NUM_SAMPLES = 1
 
 # --- Script-Specific Default Configuration ---
-DEFAULT_EVAL_MODEL = "google/gemma-3-27b-it"
-DEFAULT_REFINER_OUTPUT_SUBDIR = "single_sample_refinement_results"  # Specific subdir
+# DEFAULT_EVAL_MODEL = "google/gemma-3-27b-it"
+# DEFAULT_EVAL_MODEL = "google/gemini-2.5-flash-preview"
+DEFAULT_EVAL_MODEL = "x-ai/grok-3-mini-beta"
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(
@@ -71,7 +72,7 @@ AI AGENT:
 )
 
 # Add common arguments (will add --seed, --num-samples etc.)
-add_common_eval_args(parser, default_output_subdir=DEFAULT_REFINER_OUTPUT_SUBDIR)
+add_common_eval_args(parser, default_output_subdir=Path(__file__).stem)
 
 # Add script-specific arguments
 parser.add_argument(

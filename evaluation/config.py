@@ -9,6 +9,9 @@ from user_embeddings.utils.teacher_prompts import (
     all_in_one as all_in_one_module,
 )
 from user_embeddings.utils.teacher_prompts import (
+    inference as inference_module,
+)
+from user_embeddings.utils.teacher_prompts import (
     intent_only as intent_only_module,
 )
 from user_embeddings.utils.teacher_prompts import (
@@ -26,7 +29,7 @@ from user_embeddings.utils.teacher_prompts import (
 # Stores tuple: (prompt_text, prompt_version)
 AVAILABLE_PROMPTS: Dict[str, Tuple[str, str]] = {
     "all_in_one": (all_in_one_module.PROMPT, all_in_one_module.VERSION),
-    # "inference": (inference_module.PROMPT, inference_module.VERSION),
+    "inference": (inference_module.PROMPT, inference_module.VERSION),
     # "separation": (separation_module.PROMPT, separation_module.VERSION),
     "intent_only": (intent_only_module.PROMPT, intent_only_module.VERSION),
     "koa_only": (koa_only_module.PROMPT, koa_only_module.VERSION),
@@ -41,7 +44,7 @@ AVAILABLE_OUTPUT_MODELS: Dict[str, type] = {
     "intent_only": intent_only_module.PromptOutput,
     # Add other models here if they are defined and used in workflows
     # "separation": separation_module.PromptOutput,
-    # "inference": inference_module.PromptOutput,
+    # " inference": inference_module.PromptOutput,
     # "all_in_one": all_in_one_module.PromptOutput,
 }
 
@@ -82,6 +85,14 @@ WORKFLOWS: Dict[str, List[PromptStage]] = {
         {
             "stage": 1,
             "prompts": ["intent_only"],
+            "input_from": None,
+            "input_formatter": None,
+        }
+    ],
+    "inference_only": [
+        {
+            "stage": 1,
+            "prompts": ["inference"],
             "input_from": None,
             "input_formatter": None,
         }

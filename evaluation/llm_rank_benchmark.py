@@ -47,9 +47,11 @@ project_root = Path(__file__).resolve().parent.parent
 # --- Script-Specific Default Configuration ---
 DEFAULT_MODELS_TO_TEST = [
     # "deepseek/deepseek-r1-distill-llama-70b",
-    # "deepseek/deepseek-chat-v3-0324",
+    "deepseek/deepseek-chat-v3-0324",
+    "deepseek/deepseek-r1",
     "google/gemma-3-27b-it",
     "google/gemini-2.5-flash-preview",
+    "x-ai/grok-3-mini-beta",
 ]
 # DEFAULT_JUDGE_MODEL, DEFAULT_NUM_SAMPLES, DEFAULT_SEED are now in config.py
 DEFAULT_RANK_OUTPUT_SUBDIR = "llm_rank_results"  # Specific subdir for this script
