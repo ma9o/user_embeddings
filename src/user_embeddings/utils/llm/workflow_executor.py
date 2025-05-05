@@ -18,7 +18,9 @@ class TaskDefinition(TypedDict):
     """Defines a single task within a workflow stage."""
 
     prompt: str  # Name of the prompt module (also serves as task ID)
-    input_from: Optional[List[str]]  # List of task IDs from PREVIOUS stages
+    input_from: Optional[
+        List[str]
+    ]  # List of task IDs from PREVIOUS stages or "__RAW_INPUT__"
 
 
 class WorkflowStage(TypedDict):
@@ -31,10 +33,7 @@ class WorkflowStage(TypedDict):
 # --- Constants ---
 # Removed FINAL_MERGED_OUTPUT_KEY as merging is no longer done explicitly here
 # The output of a task is its validated data or an error indicator.
-
-
-# --- Input Formatters ---
-# Removed all input formatters and DEFAULT_INPUT_FORMATTERS
+RAW_INPUT_PLACEHOLDER = "__RAW_INPUT__"  # Special key to inject initial workflow input
 
 
 # --- Workflow Validation ---
@@ -53,7 +52,8 @@ def validate_workflow(
     Checks for:
         - Existence of all specified prompt modules.
         - If a prompt module has a corresponding Pydantic model, it's considered parsable.
-        - Correct dependencies (input_from tasks must exist in previous stages).
+        - Correct dependencies (input_from tasks must exist in previous stages,
+          unless it's the special placeholder RAW_INPUT_PLACEHOLDER).
 
     Returns:
         True if the workflow is valid, False otherwise. Prints errors to console.
@@ -120,12 +120,18 @@ def validate_workflow(
             # Validate input_from dependencies
             input_from_tasks = task_def.get("input_from")
             if input_from_tasks:
-                if stage_num == 1:
+                # Allow RAW_INPUT_PLACEHOLDER in stage 1, but warn if other inputs are specified unnecessarily
+                if stage_num == 1 and any(
+                    t != RAW_INPUT_PLACEHOLDER for t in input_from_tasks
+                ):
                     print(
-                        f"Warning: Task '{task_id}' in stage 1 of workflow '{workflow_name}' specifies 'input_from', which is usually unnecessary for the first stage."
+                        f"Warning: Task '{task_id}' in stage 1 of workflow '{workflow_name}' specifies 'input_from' other than '{RAW_INPUT_PLACEHOLDER}'. This is unusual for the first stage."
                     )
-                    # Allow it, but warn. Might be valid if workflow starts conditionally.
                 for required_input_task in input_from_tasks:
+                    # Skip check if it's the raw input placeholder
+                    if required_input_task == RAW_INPUT_PLACEHOLDER:
+                        continue
+                    # Check if the required non-raw input task exists in previous stages
                     if required_input_task not in defined_outputs:
                         print(
                             f"Error: Task '{task_id}' in stage {stage_num} requires input from '{required_input_task}', "
@@ -166,11 +172,13 @@ async def execute_workflow(
 ) -> Dict[str, Any]:
     """Executes a defined workflow for a single model and initial input.
     Parses and validates the output of each task using corresponding Pydantic models
-    if available in `available_output_models`.
+    if available in `available_output_models`. Allows injecting the `initial_input`
+    at any stage using the `RAW_INPUT_PLACEHOLDER` ("__RAW_INPUT__") in `input_from`.
+    Input for each task is determined solely by its `input_from` definition.
 
     Args:
         model_name: The name of the LLM to use.
-        initial_input: The starting input data for the first stage.
+        initial_input: The starting input data for the workflow.
         workflow: List of stage definitions.
         available_prompts: Mapping of prompt module names to (prompt_text, version).
         available_output_models: Mapping of prompt module names to Pydantic models.
@@ -184,6 +192,7 @@ async def execute_workflow(
               if parsing/validation was attempted but failed.
             - An error string (e.g., "ERROR: Model execution failed", "ERROR: Missing required inputs")
               if the task couldn't run.
+            - The `initial_input` string if requested via `RAW_INPUT_PLACEHOLDER`.
     """
     intermediate_results: Dict[str, Any] = {}  # Stores validated outputs or errors
     raw_outputs: Dict[str, str] = {}  # Stores raw LLM string outputs
@@ -203,73 +212,74 @@ async def execute_workflow(
         for task_def in tasks_in_stage:
             task_id = task_def["prompt"]
             input_from_tasks: Optional[List[str]] = task_def.get("input_from")
-            current_task_input_str: str = ""
+            current_task_input_str = ""  # Default to empty, determined by input_from
             skip_task = False
             error_msg = None
 
-            # 1. Prepare input for the current task
-            if stage_num == 1:
-                if input_from_tasks:
-                    print(
-                        f"Warning: Task '{task_id}' in stage 1 specifies input_from, check workflow logic."
-                    )
-                    # Attempt to proceed assuming inputs might exist if workflow starts mid-way? Risky.
-                    # For simplicity, assume initial_input is always used for stage 1 unless overridden.
-                current_task_input_str = initial_input
-            else:  # stage > 1
-                if not input_from_tasks:
-                    error_msg = (
-                        f"ERROR: Task '{task_id}' in stage {stage_num} (model {model_name}) "
-                        f"must specify 'input_from' listing tasks from previous stages."
-                    )
+            # Always check if raw input is requested first
+            raw_input_requested = (
+                input_from_tasks and RAW_INPUT_PLACEHOLDER in input_from_tasks
+            )
+            if raw_input_requested:
+                inputs_to_serialize = {}
+                inputs_to_serialize[RAW_INPUT_PLACEHOLDER] = initial_input
+
+            # Determine other dependencies
+            other_input_tasks = []
+            if input_from_tasks:
+                other_input_tasks = [
+                    t for t in input_from_tasks if t != RAW_INPUT_PLACEHOLDER
+                ]
+
+            if not other_input_tasks:
+                # Case 1: No dependencies OR only raw input requested
+                if not input_from_tasks:  # No input_from specified at all
+                    # This implies the task needs no input.
+                    # If a task needs input, it must specify it via `input_from`.
+                    current_task_input_str = ""  # Task takes no input data
+                elif raw_input_requested:  # Only raw input requested
+                    current_task_input_str = initial_input
+                # else: input_from_tasks was empty or None - handled above
+            else:
+                # Case 2: Depends on previous tasks (and potentially raw input)
+                all_inputs_available = True
+                for req_task_id in other_input_tasks:
+                    if req_task_id not in intermediate_results:
+                        all_inputs_available = False
+                        error_msg = f"ERROR: Missing required input '{req_task_id}' for task '{task_id}' in stage {stage_num} (model {model_name}). Available: {list(intermediate_results.keys())}"
+                        break
+                    input_val = intermediate_results[req_task_id]
+                    if isinstance(input_val, str) and input_val.startswith("ERROR:"):
+                        all_inputs_available = False
+                        error_msg = f"ERROR: Required input '{req_task_id}' for task '{task_id}' failed in a previous step: {input_val}"
+                        break
+                    inputs_to_serialize[req_task_id] = input_val
+
+                if not all_inputs_available:
+                    print(error_msg)
+                    skip_task = True
+                elif not inputs_to_serialize:  # Should not happen if other_input_tasks was non-empty and all_inputs_available
+                    error_msg = f"ERROR: Internal logic error - failed to collect any valid inputs for task '{task_id}' stage {stage_num}."
                     print(error_msg)
                     skip_task = True
                 else:
-                    # Gather required inputs (validated objects/dicts or raw strings)
-                    inputs_to_serialize = {}
-                    all_inputs_available = True
-                    for req_task_id in input_from_tasks:
-                        if req_task_id not in intermediate_results:
-                            all_inputs_available = False
-                            error_msg = f"ERROR: Missing required input '{req_task_id}' for task '{task_id}' in stage {stage_num} (model {model_name})."
-                            break
-                        input_val = intermediate_results[req_task_id]
-                        # Check if the required input itself is an error string
-                        if isinstance(input_val, str) and input_val.startswith(
-                            "ERROR:"
-                        ):
-                            all_inputs_available = False
-                            error_msg = f"ERROR: Required input '{req_task_id}' for task '{task_id}' failed in a previous step."
-                            break
-                        # Store the actual value (could be Pydantic model, dict, or raw string)
-                        inputs_to_serialize[req_task_id] = input_val
-
-                    if not all_inputs_available:
+                    # Serialize the collected inputs (could include RAW_INPUT_PLACEHOLDER key)
+                    try:
+                        inputs_as_dicts = {}
+                        for k, v in inputs_to_serialize.items():
+                            if isinstance(v, BaseModel):
+                                inputs_as_dicts[k] = v.model_dump()
+                            else:
+                                inputs_as_dicts[k] = (
+                                    v  # Includes raw input string if present
+                                )
+                        current_task_input_str = json.dumps(
+                            inputs_as_dicts, indent=2, ensure_ascii=False
+                        )
+                    except TypeError as e:
+                        error_msg = f"ERROR: Failed to serialize inputs for task '{task_id}' in stage {stage_num}: {e}"
                         print(error_msg)
                         skip_task = True
-                    elif not inputs_to_serialize:
-                        # This case shouldn't happen if input_from_tasks is not empty and all_inputs_available is True
-                        error_msg = f"ERROR: Internal logic error - no inputs collected for task '{task_id}' despite 'input_from' being specified."
-                        print(error_msg)
-                        skip_task = True
-                    else:
-                        # Serialize the collected inputs into a JSON string
-                        try:
-                            # Convert Pydantic models to dicts for serialization
-                            inputs_as_dicts = {}
-                            for k, v in inputs_to_serialize.items():
-                                if isinstance(v, BaseModel):
-                                    inputs_as_dicts[k] = v.model_dump()
-                                else:
-                                    # Assume it's already serializable (dict, str, etc.)
-                                    inputs_as_dicts[k] = v
-                            current_task_input_str = json.dumps(
-                                inputs_as_dicts, indent=2, ensure_ascii=False
-                            )
-                        except TypeError as e:
-                            error_msg = f"ERROR: Failed to serialize inputs for task '{task_id}' in stage {stage_num}: {e}"
-                            print(error_msg)
-                            skip_task = True
 
             # 2. Create task coroutine if not skipped
             if skip_task:

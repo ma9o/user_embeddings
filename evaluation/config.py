@@ -67,32 +67,37 @@ if separation_module and hasattr(separation_module, "PromptOutput"):
 # Used by both llm_rank_benchmark and prompt_adherence
 WORKFLOWS: Dict[str, List[WorkflowStage]] = {
     "serial_separation_inference": [
-        {"stage": 1, "tasks": [{"prompt": "separation", "input_from": None}]},
+        {
+            "stage": 1,
+            "tasks": [{"prompt": "separation", "input_from": "__RAW_INPUT__"}],
+        },
         {"stage": 2, "tasks": [{"prompt": "inference", "input_from": ["separation"]}]},
     ],
     "concurrent_intent_koa": [
         {
             "stage": 1,
             "tasks": [
-                {"prompt": "intent_only", "input_from": None},
-                {"prompt": "koa_only", "input_from": None},
+                {"prompt": "intent_only", "input_from": "__RAW_INPUT__"},
+                {"prompt": "koa_only", "input_from": "__RAW_INPUT__"},
             ],
         },
     ],
     "single_all_in_one": [
-        {"stage": 1, "tasks": [{"prompt": "all_in_one", "input_from": None}]}
+        {"stage": 1, "tasks": [{"prompt": "all_in_one", "input_from": "__RAW_INPUT__"}]}
     ],
     "single_intent_only": [
-        {"stage": 1, "tasks": [{"prompt": "intent_only", "input_from": None}]}
+        {
+            "stage": 1,
+            "tasks": [{"prompt": "intent_only", "input_from": "__RAW_INPUT__"}],
+        }
     ],
     "inference_only": [
-        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": None}]}
+        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": "__RAW_INPUT__"}]}
     ],
     "inference_with_intent": [
-        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": None}]},
+        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": "__RAW_INPUT__"}]},
         {"stage": 2, "tasks": [{"prompt": "intent_only", "input_from": ["inference"]}]},
     ],
-    # Add other common workflows here
 }
 
 
