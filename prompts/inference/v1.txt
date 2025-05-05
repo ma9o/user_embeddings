@@ -1,6 +1,6 @@
 Analyze the following conversation to identify the primary intents of the user identified as "SUBJECT". Your analysis should adhere to the following constraints:
 
-1.  **IDENTIFY_INTENTS:** The core task is to determine the main underlying goals, purposes, or objectives "SUBJECT" was trying to achieve through their contributions to the conversation.
+1.  **IDENTIFY_UNDERLYING_INTENTS:** The core task is to determine the main underlying goals, purposes, or objectives "SUBJECT" was trying to achieve through their contributions to the conversation.
 2.  **MINIMIZE_AND_DISTINGUISH:** Produce the smallest possible set of distinct intents that fully capture "SUBJECT"'s actions and goals. Ensure each identified intent is clearly different from the others, avoiding significant overlap.
 3.  **ABSTRACT_FROM_FORM:** Focus on the *why* behind the communication, not just the *what*. Identify the underlying purpose or goal (the intent) that the specific communication acts (like giving advice, expressing sympathy) serve, rather than just describing the surface-level actions.
 4.  **CONTEXTUALIZE_FOR_EXTERNAL_AUDIENCE:** Frame the output so it's fully understandable to someone who has *not* read the original conversation. This requires embedding necessary context from the source directly into the description of each intent.

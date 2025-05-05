@@ -16,6 +16,7 @@ def initialize_openrouter_client():
                 "Content-Type": "application/json",
             },
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=200),
+            timeout=httpx.Timeout(60.0, read=None, connect=None),
         )
     return openrouter_client
 

@@ -88,6 +88,10 @@ WORKFLOWS: Dict[str, List[WorkflowStage]] = {
     "inference_only": [
         {"stage": 1, "tasks": [{"prompt": "inference", "input_from": None}]}
     ],
+    "inference_with_intent": [
+        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": None}]},
+        {"stage": 2, "tasks": [{"prompt": "intent_only", "input_from": ["inference"]}]},
+    ],
     # Add other common workflows here
 }
 

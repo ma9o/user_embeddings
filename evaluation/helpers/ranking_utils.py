@@ -41,26 +41,26 @@ def create_judge_prompt(
     for masked_name, output in masked_outputs.items():
         prompt += f"\nOutput ({masked_name}):\n{output}\n---"
     prompt += "\n\nTASK:\n1. Evaluate the outputs based *only* on how well they follow the INSTRUCTION PROMPT for the given INPUT DATA. Consider clarity, structure, adherence to format, and accuracy of the generated summary/actions based *solely* on the provided input context.\n"
-    prompt += "2. Determine if *at least one* of the provided outputs correctly and completely fulfilled the INSTRUCTION PROMPT.\n\n"
-    prompt += "RANKING AND CORRECTNESS FORMAT:\nProvide your evaluation as a JSON object containing three keys: 'ranking' (a list of anonymized model names, ordered from best to worst), 'rationale' (a brief explanation for your ranking decisions), and 'any_correct' (a boolean value - `true` if at least one model was correct, `false` otherwise). Use the anonymized model names provided (e.g., Model A, Model B). For example:\n"
+    prompt += "2. Identify *all* anonymized model outputs that correctly and completely fulfilled the INSTRUCTION PROMPT.\n\n"
+    prompt += "RANKING AND CORRECTNESS FORMAT:\nProvide your evaluation as a JSON object containing three keys: 'ranking' (a list of anonymized model names, ordered from best to worst), 'rationale' (a brief explanation for your ranking decisions), and 'correct_models' (a list containing the anonymized names of *only* the models whose output was correct and complete. If no models were correct, provide an empty list `[]`). Use the anonymized model names provided (e.g., MODEL_A, MODEL_B). For example:\n"
     prompt += (
         "```json\n"
         "{\n"
         '  "ranking": ["MODEL_A", "MODEL_C", "MODEL_B"],\n'
         '  "rationale": "MODEL_A was best because..., MODEL_C was okay..., MODEL_B failed...",\n'
-        '  "any_correct": true\n'
+        '  "correct_models": ["MODEL_A", "MODEL_C"]\n'
         "}\n"
         "```\n"
         "\nIMPORTANT: In your 'rationale', make sure to refer to the models using their anonymized names (e.g., MODEL_A, MODEL_B).\n"
     )
-    prompt += f"The available anonymized model names are: {masked_model_names}. Use these exact names (e.g., MODEL_A, MODEL_B) in your response. Return ONLY the JSON object and nothing else."
+    prompt += f"The available anonymized model names are: {masked_model_names}. Use these exact names (e.g., MODEL_A, MODEL_B) in the 'ranking' list and, if applicable, in the 'correct_models' list. Return ONLY the JSON object and nothing else."
     return prompt, mask_to_original_map, original_to_mask_map
 
 
 def parse_judge_output(
     judge_response: str,
-) -> Tuple[Optional[List[str]], Optional[str], Optional[bool]]:
-    """Parses the ranking judge's JSON response using the utility function."""
+) -> Tuple[Optional[List[str]], Optional[str], Optional[List[str]]]:
+    """Parses the ranking judge's JSON response, expecting ranking, rationale, and a list of correct models."""
     parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
 
     if parsed_json is None:
@@ -70,7 +70,7 @@ def parse_judge_output(
     # Extract fields with type checking
     ranking = parsed_json.get("ranking")
     rationale = parsed_json.get("rationale")
-    any_correct = parsed_json.get("any_correct")
+    correct_models = parsed_json.get("correct_models")
 
     # Validate types
     if not isinstance(ranking, list) or not all(
@@ -83,13 +83,16 @@ def parse_judge_output(
     if not isinstance(rationale, str):
         print(f"Warning: Judge output 'rationale' key is not a string: {rationale}")
         rationale = None
-    if not isinstance(any_correct, bool):
+    # Validate correct_models list
+    if not isinstance(correct_models, list) or not all(
+        isinstance(item, str) for item in correct_models
+    ):
         print(
-            f"Warning: Judge output 'any_correct' key is not a boolean: {any_correct}"
+            f"Warning: Judge output 'correct_models' key is not a list of strings: {correct_models}"
         )
-        any_correct = None
+        correct_models = None
 
-    return ranking, rationale, any_correct
+    return ranking, rationale, correct_models
 
 
 async def run_judge_evaluation(
@@ -167,17 +170,17 @@ def aggregate_ranking_results(
     all_task_ids_in_workflow = set(
         task["prompt"] for stage in workflow for task in stage.get("tasks", [])
     )
-    judge_prompt_version = available_prompts.get(judge_prompt_name, ("", "N/A"))[1]
+    judge_prompt_version = available_prompts.get(judge_prompt_name, ("N/A",))[1]
 
     for i, sample_data in enumerate(sample_workflow_results):
         judge_data = judge_response_map.get(i)
-        ranking_masked, rationale, any_correct = (None, None, None)
+        ranking_masked, rationale, correct_models_masked = (None, None, None)
         mask_to_original_map = None
         original_to_mask_map = None
         judge_raw_response = None
         if judge_data:
             judge_raw_response, mask_to_original_map, original_to_mask_map = judge_data
-            ranking_masked, rationale, any_correct = parse_judge_output(
+            ranking_masked, rationale, correct_models_masked = parse_judge_output(
                 judge_raw_response
             )
         else:
@@ -186,6 +189,7 @@ def aggregate_ranking_results(
             )
 
         ranking_original = None
+        correct_models_original_set = None
         expected_models_in_judge_input = set()
         if mask_to_original_map:
             expected_models_in_judge_input = set(mask_to_original_map.values())
@@ -201,6 +205,18 @@ def aggregate_ranking_results(
                 except KeyError as e:
                     print(f"Error translating ranking for sample {i}: {e}")
                     ranking_original = None
+            if correct_models_masked is not None:
+                try:
+                    correct_models_original_set = {
+                        mask_to_original_map[masked]
+                        for masked in correct_models_masked
+                        if masked in mask_to_original_map
+                    }
+                except KeyError as e:
+                    print(f"Error translating correct_models list for sample {i}: {e}")
+                    correct_models_original_set = None
+            elif judge_data:
+                correct_models_original_set = None
 
         input_context = sample_data.get("input_data", "ERROR: Input not found")
         input_length = len(input_context) if isinstance(input_context, str) else -1
@@ -242,7 +258,6 @@ def aggregate_ranking_results(
             else "ERROR: Rationale not parsed"
             if judge_data
             else "Judge Skipped/Failed",
-            "judge_any_correct": any_correct if any_correct is not None else "ERROR",
             "seed": effective_seed,
             "workflow_name": workflow_name,
             "judge_prompt_name": judge_prompt_name,
@@ -263,6 +278,18 @@ def aggregate_ranking_results(
                 model, "N/A"
             )
             result_row[f"rank_{model}"] = rank_map.get(model, -1)
+
+            model_correctness_flag: bool | str
+            if model not in expected_models_in_judge_input:
+                model_correctness_flag = "Not Judged (Input Error)"
+            elif correct_models_original_set is not None:
+                model_correctness_flag = model in correct_models_original_set
+            elif judge_data:
+                model_correctness_flag = "ERROR: Judge Parse Failed"
+            else:
+                model_correctness_flag = "ERROR: Judge Skipped/Failed"
+
+            result_row[f"correct_{model}"] = model_correctness_flag
 
             model_exec_result = model_outputs_all_tasks.get(model, {})
             model_raw_outputs = model_exec_result.get("raw_outputs", {})
@@ -318,50 +345,75 @@ def calculate_and_print_leaderboard(
     total_samples = len(results_df)
     for model in models_to_test:
         rank_col = f"rank_{model}"
+        correct_col = f"correct_{model}"
+        avg_rank = float("inf")
+        num_valid_rank = 0
+        correct_percent = 0.0
+        num_judged_correctness = 0
+
+        # Calculate Rank Stats
         if rank_col in results_df.columns:
             valid_ranks_df = results_df.filter(pl.col(rank_col) > 0)
-            num_valid = len(valid_ranks_df)
-            if num_valid > 0:
+            num_valid_rank = len(valid_ranks_df)
+            if num_valid_rank > 0:
                 avg_rank = valid_ranks_df[rank_col].mean()
-                overall_leaderboard.append((model, avg_rank, num_valid))
-            else:
-                overall_leaderboard.append((model, float("inf"), 0))
         else:
             print(
-                f"Warning: Rank column '{rank_col}' not found. Skipping model {model} in overall leaderboard."
+                f"Warning: Rank column '{rank_col}' not found. Skipping rank calculation for {model}."
             )
-            overall_leaderboard.append((model, float("inf"), 0))
-    overall_leaderboard.sort(key=lambda x: x[1])
+
+        # Calculate Correctness Stats
+        if correct_col in results_df.columns:
+            # Filter out rows where judge was skipped, failed, or model wasn't in the judge input
+            # Select only rows where the correctness value is explicitly True or False
+            judged_correctness_df = results_df.filter(
+                (pl.col(correct_col) == True) | (pl.col(correct_col) == False)
+            )
+            num_judged_correctness = len(judged_correctness_df)
+            if num_judged_correctness > 0:
+                true_count = judged_correctness_df.filter(
+                    pl.col(correct_col) == True
+                ).height
+                correct_percent = (true_count / num_judged_correctness) * 100
+        else:
+            print(
+                f"Warning: Correctness column '{correct_col}' not found. Skipping correctness calculation for {model}."
+            )
+
+        overall_leaderboard.append(
+            (
+                model,
+                avg_rank,
+                num_valid_rank,
+                correct_percent,
+                num_judged_correctness,
+            )
+        )
+
+    overall_leaderboard.sort(key=lambda x: x[1])  # Sort by average rank
+
     header_line = f"--- Overall Leaderboard ({total_samples} Samples) ---"
     print(f"\n{header_line}")
     print("-" * len(header_line))
-    for i, (model, avg_rank, num_valid) in enumerate(overall_leaderboard):
-        rank_str = f"{avg_rank:.2f}" if num_valid > 0 else "N/A"
+    print(
+        f"{'Model':<40} {'Avg Rank':<10} {'Correct (%)':<12} {'# Ranked':<10} {'# Judged Correct'}"
+    )
+    print("-" * len(header_line))
+    for i, (
+        model,
+        avg_rank,
+        num_valid_rank,
+        correct_percent,
+        num_judged_correctness,
+    ) in enumerate(overall_leaderboard):
+        rank_str = f"{avg_rank:.2f}" if num_valid_rank > 0 else "N/A"
+        correct_str = f"{correct_percent:.1f}%" if num_judged_correctness > 0 else "N/A"
+        rank_count_str = f"{num_valid_rank}/{total_samples}"
+        correct_count_str = f"{num_judged_correctness}/{total_samples}"
         print(
-            f"{i + 1}. {model:<40} Avg Rank = {rank_str:<6} ({num_valid:>3}/{total_samples} ranked samples)"
+            f"{i + 1}. {model:<37} {rank_str:<10} {correct_str:<12} {rank_count_str:<10} {correct_count_str}"
         )
     print("-" * len(header_line))
-
-    print("\n--- Judge Correctness Assessment ---")
-    if "judge_any_correct" in results_df.columns:
-        correct_counts = results_df["judge_any_correct"].value_counts()
-        print(correct_counts)
-        num_judged = results_df.filter(pl.col("judge_any_correct") != "ERROR").height
-        if num_judged > 0:
-            try:
-                true_count = correct_counts.filter(pl.col("judge_any_correct") == True)[
-                    "count"
-                ].sum()
-            except pl.ColumnNotFoundError:
-                true_count = 0  # Handle case where 'true' count might be missing
-            percent_correct = (true_count / num_judged) * 100
-            print(
-                f"Percentage of samples where judge found AT LEAST ONE correct output: {percent_correct:.2f}%"
-            )
-        else:
-            print("No samples were successfully judged for correctness.")
-    else:
-        print("'judge_any_correct' column not found in results.")
 
     print("\n--- Leaderboards by Dynamic Input Length (Terciles) ---")
     if (

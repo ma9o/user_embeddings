@@ -53,12 +53,12 @@ project_root = Path(__file__).resolve().parent.parent
 #     "deepseek/deepseek-r1-distill-llama-70b",
 #     "deepseek/deepseek-chat-v3-0324",
 #     "deepseek/deepseek-r1",
-#     "google/gemini-2.5-flash-preview",
+#     "google/gemini-2.5-flash-preview:thinking",
 #     "meta-llama/llama-4-maverick",
 #     "google/gemma-3-27b-it",
 #     "x-ai/grok-3-mini-beta",
 #     "qwen/qwen3-32b",
-#     "qwen/qwen3-30b-a3b"
+#     "qwen/qwen3-235b-a22b"
 # ]
 DEFAULT_EVAL_MODEL = "qwen/qwen3-32b"
 # DEFAULT_JUDGE_MODEL, DEFAULT_NUM_SAMPLES, DEFAULT_SEED are now in config.py
