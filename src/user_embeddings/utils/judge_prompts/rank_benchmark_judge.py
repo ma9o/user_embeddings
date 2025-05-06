@@ -1,8 +1,30 @@
 import random
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Import utility shared or needed by these funcs
 from user_embeddings.utils.parsing import parse_llm_json_output
+
+# Read the base judge prompt
+_JUDGE_BASE_PROMPT_TEXT = ""
+_PROJECT_ROOT = (
+    Path(__file__).resolve().parents[4]
+)  # src/user_embeddings/utils/judge_prompts -> user_embeddings (project root)
+_JUDGE_BASE_TXT_PATH = _PROJECT_ROOT / "prompts" / "judge_base.txt"
+
+try:
+    with open(_JUDGE_BASE_TXT_PATH, "r", encoding="utf-8") as f:
+        _JUDGE_BASE_PROMPT_TEXT = f.read().strip()
+except FileNotFoundError:
+    print(
+        f"Warning: Base judge prompt file not found at {_JUDGE_BASE_TXT_PATH}. Proceeding without it."
+    )
+    _JUDGE_BASE_PROMPT_TEXT = "IMPORTANT GENERAL INSTRUCTION: Default to prioritizing precision over recall in your evaluations."  # Fallback
+except Exception as e:
+    print(
+        f"Error reading base judge prompt file at {_JUDGE_BASE_TXT_PATH}: {e}. Proceeding without it."
+    )
+    _JUDGE_BASE_PROMPT_TEXT = "IMPORTANT GENERAL INSTRUCTION: Default to prioritizing precision over recall in your evaluations."  # Fallback
 
 
 # --- Helper for Masking ---
@@ -53,7 +75,12 @@ def create_judge_prompt(
     # e.g., "['MODEL_A', 'MODEL_B']"
     masked_model_names_str = str(masked_model_names)
 
-    prompt = f"""You are an expert evaluator tasked with ranking the quality of different Large Language Model (LLM) outputs based on a given instruction and input.
+    # Prepend the base prompt text if it exists
+    base_prompt_section = (
+        f"{_JUDGE_BASE_PROMPT_TEXT}\n\n" if _JUDGE_BASE_PROMPT_TEXT else ""
+    )
+
+    prompt = f"""{base_prompt_section}You are an expert evaluator tasked with ranking the quality of different Large Language Model (LLM) outputs based on a given instruction and input.
 
 INSTRUCTION PROMPT GIVEN TO MODELS:
 ---

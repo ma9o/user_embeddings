@@ -1,7 +1,24 @@
+from pathlib import Path
 from typing import Dict, Optional
 
 # Import utility shared or needed by these funcs
 from user_embeddings.utils.parsing import parse_llm_json_output
+
+# Read the base judge prompt
+_JUDGE_BASE_PROMPT_TEXT = ""
+_PROJECT_ROOT = (
+    Path(__file__).resolve().parents[4]
+)  # src/user_embeddings/utils/judge_prompts -> user_embeddings (project root)
+_JUDGE_BASE_TXT_PATH = _PROJECT_ROOT / "prompts" / "judge_base.txt"
+
+try:
+    with open(_JUDGE_BASE_TXT_PATH, "r", encoding="utf-8") as f:
+        _JUDGE_BASE_PROMPT_TEXT = f.read().strip()
+except Exception as e:
+    print(
+        f"Error reading base judge prompt file at {_JUDGE_BASE_TXT_PATH}: {e}. Proceeding without it."
+    )
+    raise e
 
 
 def create_judge_prompt(
@@ -10,7 +27,13 @@ def create_judge_prompt(
     model_output: str,
 ) -> str:
     """Creates a prompt for a judge model to identify constraint violations using f-strings."""
-    prompt = f"""You are an expert evaluator tasked with identifying violations of specific constraints in a Large Language Model (LLM) output based on a given input, and a set of constraints.
+
+    # Prepend the base prompt text if it exists
+    base_prompt_section = (
+        f"{_JUDGE_BASE_PROMPT_TEXT}\n\n" if _JUDGE_BASE_PROMPT_TEXT else ""
+    )
+
+    prompt = f"""{base_prompt_section}You are an expert evaluator tasked with identifying violations of specific constraints in a Large Language Model (LLM) output based on a given input, and a set of constraints.
 
 INPUT DATA GIVEN TO THE MODEL:
 ---

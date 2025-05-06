@@ -1,0 +1,2 @@
+The broader goal of this project is to generate enough labels to build a contrastive dataset of around 10M records, which is but a small percentage of what we could extract from the raw data using the inferences from the LLMs you're judging.
+For this reason there is no need to be harsh on the *recall* criteria such as exhaustiveness (if any); rather focus on *precision* and just make sure no major details are left out from the inferences.
