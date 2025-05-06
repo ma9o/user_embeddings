@@ -1,6 +1,9 @@
+import logging
 from typing import List, Tuple
 
 import dask.dataframe as dd
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_input_dataframes(
@@ -43,14 +46,14 @@ def _validate_input_dataframes(
 
 def _find_relevant_link_ids(ddf_comments: dd.DataFrame, user_id: str) -> List[str]:
     """Finds unique link_ids for submissions the target user commented on."""
-    print(f"Filtering comments for user '{user_id}' to find relevant submissions...")
+    logger.info(f"Filtering comments for user '{user_id}' to find relevant submissions...")
     # Select only the link_id column early
     user_comments_links = ddf_comments[ddf_comments["author"] == user_id][["link_id"]]
     # Drop duplicates and compute
     relevant_link_ids = (
         user_comments_links.dropna().drop_duplicates()["link_id"].compute().tolist()
     )
-    print(
+    logger.info(
         f"Found {len(relevant_link_ids)} submissions with comments from user '{user_id}'."
     )
     return relevant_link_ids
@@ -71,7 +74,7 @@ def _filter_dataframes_by_links(
             lambda pdf: pdf.iloc[0:0], meta=ddf_submissions._meta
         )
 
-    print("Filtering comments and submissions based on relevant link_ids...")
+    logger.info("Filtering comments and submissions based on relevant link_ids...")
     # Filter comments based on the computed list
     ddf_comments_filtered = ddf_comments[
         ddf_comments["link_id"].isin(relevant_link_ids)
@@ -87,8 +90,8 @@ def _filter_dataframes_by_links(
         ddf_submissions["id"].isin(relevant_submission_ids_short)
     ].copy()
 
-    print(f"Filtered comments partitions: {ddf_comments_filtered.npartitions}")
-    print(f"Filtered submissions partitions: {ddf_submissions_filtered.npartitions}")
+    logger.info(f"Filtered comments partitions: {ddf_comments_filtered.npartitions}")
+    logger.info(f"Filtered submissions partitions: {ddf_submissions_filtered.npartitions}")
     return ddf_comments_filtered, ddf_submissions_filtered
 
 
@@ -96,7 +99,7 @@ def _prepare_and_merge_data(
     ddf_comments_filtered: dd.DataFrame, ddf_submissions_filtered: dd.DataFrame
 ) -> dd.DataFrame:
     """Prepares filtered DataFrames and merges them."""
-    print("Preparing filtered comments and submissions for merge...")
+    logger.info("Preparing filtered comments and submissions for merge...")
 
     # Define required columns locally (could be passed as args)
     required_comment_cols = [
@@ -147,7 +150,7 @@ def _prepare_and_merge_data(
     ddf_submissions_prep = ddf_submissions_prep.astype({"id": "string"})
 
     # --- Perform Dask Merge ---
-    print(
+    logger.info(
         "Merging prepared comments with prepared submissions (constructing Dask graph)..."
     )
     ddf_merged = dd.merge(
@@ -157,5 +160,5 @@ def _prepare_and_merge_data(
         right_on="id",
         how="left",  # Keep all comments from relevant submissions
     )
-    print("Merge graph constructed.")
+    logger.info("Merge graph constructed.")
     return ddf_merged

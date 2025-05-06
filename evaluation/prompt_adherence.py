@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -31,6 +32,8 @@ from user_embeddings.utils.llm.workflow_executor import (
     # DEFAULT_INPUT_FORMATTERS no longer needed
     validate_workflow,  # Shared
 )
+
+logger = logging.getLogger(__name__)
 
 # No longer need direct imports for prompts/models used only in config
 # from user_embeddings.utils.teacher_prompts import ...
@@ -81,10 +84,17 @@ async def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     # Use imported WORKFLOWS
     selected_workflow_name = args.workflow
     selected_workflow = WORKFLOWS[selected_workflow_name]
-    print(
+    logger.info(
         f"Using workflow '{selected_workflow_name}' to generate outputs for model '{args.model_to_evaluate}'"
     )
 
@@ -101,20 +111,20 @@ async def main():
         available_output_models=AVAILABLE_OUTPUT_MODELS,
     )
     if not is_valid:
-        print("Workflow validation failed. Exiting.")
+        logger.error("Workflow validation failed. Exiting.")
         return
 
     # --- Load Judge Constraints Prompt ---
     judge_prompt_module_name = args.judge_prompt_module  # This is for constraints
     # Use imported AVAILABLE_PROMPTS
     if judge_prompt_module_name not in AVAILABLE_PROMPTS:
-        print(
-            f"Error: Judge constraints prompt module '{judge_prompt_module_name}' not found."
+        logger.error(
+            f"Judge constraints prompt module '{judge_prompt_module_name}' not found."
         )
         return
     # Extract only the prompt text
     judge_constraints_prompt_text = AVAILABLE_PROMPTS[judge_prompt_module_name][0]
-    print(
+    logger.info(
         f"Using judge constraints prompt: '{judge_prompt_module_name}' (Version: {AVAILABLE_PROMPTS[judge_prompt_module_name][1]})"
     )
 
@@ -123,28 +133,28 @@ async def main():
     # 1. Load and Sample Data (Reused)
     # Use imported DEFAULT_SEED logic from common_args via args.seed
     effective_seed = args.seed if args.seed is not None else int(time.time())
-    print(f"Using seed: {effective_seed}")
+    logger.info(f"Using seed: {effective_seed}")
 
     # Determine input source (Reused logic)
     # Uses args.input_data_file, args.input_data_dir from common_args
     if args.input_data_file:
         input_source_path = args.input_data_file
         if not input_source_path.is_file():
-            print(f"Error: Specified input data file not found: {input_source_path}")
+            logger.error(f"Specified input data file not found: {input_source_path}")
             await c.aclose()
             return
         input_data_stem = input_source_path.stem
-        print(f"Using specific input file: {input_source_path}")
+        logger.info(f"Using specific input file: {input_source_path}")
     else:
         input_source_path = args.input_data_dir
         if not input_source_path.is_dir():
-            print(
-                f"Error: Specified input data directory not found: {input_source_path}"
+            logger.error(
+                f"Specified input data directory not found: {input_source_path}"
             )
             await c.aclose()
             return
         input_data_stem = f"combined_{input_source_path.name}"
-        print(f"Sampling from CSV files in directory: {input_source_path}")
+        logger.info(f"Sampling from CSV files in directory: {input_source_path}")
 
     # Construct output filename using the utility
     try:
@@ -159,9 +169,9 @@ async def main():
             seed=effective_seed,
             append=False,
         )
-        print(f"Output will be saved to: {output_file_path}")
+        logger.info(f"Output will be saved to: {output_file_path}")
     except ValueError as e:
-        print(f"Error generating filename: {e}")
+        logger.error(f"Error generating filename: {e}")
         await c.aclose()
         return
 
@@ -176,7 +186,7 @@ async def main():
 
     # 2. Run Test Model (single model) according to Workflow (Reused helper)
     # Pass only the model to evaluate in the list
-    print(
+    logger.info(
         f"Running workflow '{selected_workflow_name}' for model '{args.model_to_evaluate}'..."
     )
     # Note: run_and_parse_test_models now passes AVAILABLE_OUTPUT_MODELS to the executor
@@ -224,15 +234,15 @@ async def main():
             "violation_count"
         ].mean()
         num_samples_judged = results_df.filter(pl.col("violation_count") >= 0).height
-        print("--- Constraint Violation Summary ---")
-        print(f"Model Evaluated: {args.model_to_evaluate}")
-        print(
+        logger.info("--- Constraint Violation Summary ---")
+        logger.info(f"Model Evaluated: {args.model_to_evaluate}")
+        logger.info(
             f"Prompt Definition: {judge_prompt_module_name} (Version: {AVAILABLE_PROMPTS.get(judge_prompt_module_name, ('', 'N/A'))[1]})"
         )
-        print(f"Total Samples Judged: {num_samples_judged}")
-        print(f"Total Violations Found: {total_violations}")
+        logger.info(f"Total Samples Judged: {num_samples_judged}")
+        logger.info(f"Total Violations Found: {total_violations}")
         if num_samples_judged > 0:
-            print(f"Average Violations per Sample: {avg_violations:.2f}")
+            logger.info(f"Average Violations per Sample: {avg_violations:.2f}")
 
         # Optional: Print top N most common violations if needed
         if "violated_constraints" in results_df.columns and num_samples_judged > 0:
@@ -289,22 +299,24 @@ async def main():
                         .value_counts()
                         .sort("count", descending=True)
                     )
-                    print("\nMost Common Violations:")
-                    print(violation_counts.head(10))
+                    logger.info("\nMost Common Violations:")
+                    logger.info(violation_counts.head(10))
                 else:
                     # This case covers initial empty df, parsing failures, empty key lists, or no actual violations found
-                    print(
+                    logger.info(
                         "No specific violation details could be extracted or parsed from results."
                     )
 
             except Exception as e:
                 # Add more specific error context if possible
-                print(f"Could not analyze violation details due to an error: {e}")
-                import traceback
+                logger.error(
+                    f"Could not analyze violation details due to an error: {e}"
+                )
+                logger.exception(
+                    "An error occurred while analyzing violation details"
+                )  # This logs the full traceback
 
-                traceback.print_exc()  # Print full traceback for debugging
-
-    print(f"Constraint evaluation complete. Results saved to {output_file_path}")
+    logger.info(f"Constraint evaluation complete. Results saved to {output_file_path}")
 
     await c.aclose()
 

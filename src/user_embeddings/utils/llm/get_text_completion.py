@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 import httpx
@@ -9,6 +10,9 @@ openrouter_client = None
 def initialize_openrouter_client():
     global openrouter_client
     if openrouter_client is None:
+        # Suppress HTTPX logging
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        logging.getLogger("httpcore").setLevel(logging.WARNING)
         openrouter_client = httpx.AsyncClient(
             base_url="https://openrouter.ai/api/v1",
             headers={

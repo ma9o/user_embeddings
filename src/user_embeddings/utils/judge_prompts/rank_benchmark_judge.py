@@ -1,9 +1,12 @@
+import logging
 import random
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Import utility shared or needed by these funcs
 from user_embeddings.utils.parsing import parse_llm_json_output
+
+logger = logging.getLogger(__name__)
 
 # Read the base judge prompt
 _JUDGE_BASE_PROMPT_TEXT = ""
@@ -16,12 +19,12 @@ try:
     with open(_JUDGE_BASE_TXT_PATH, "r", encoding="utf-8") as f:
         _JUDGE_BASE_PROMPT_TEXT = f.read().strip()
 except FileNotFoundError:
-    print(
-        f"Warning: Base judge prompt file not found at {_JUDGE_BASE_TXT_PATH}. Proceeding without it."
+    logger.warning(
+        f"Base judge prompt file not found at {_JUDGE_BASE_TXT_PATH}. Proceeding without it."
     )
     _JUDGE_BASE_PROMPT_TEXT = "IMPORTANT GENERAL INSTRUCTION: Default to prioritizing precision over recall in your evaluations."  # Fallback
 except Exception as e:
-    print(
+    logger.error(
         f"Error reading base judge prompt file at {_JUDGE_BASE_TXT_PATH}: {e}. Proceeding without it."
     )
     _JUDGE_BASE_PROMPT_TEXT = "IMPORTANT GENERAL INSTRUCTION: Default to prioritizing precision over recall in your evaluations."  # Fallback
@@ -123,7 +126,7 @@ def parse_judge_output(
     parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
 
     if parsed_json is None:
-        print(f"Error parsing judge output. Raw output:\n{judge_response}")
+        logger.error(f"Error parsing judge output. Raw output:\n{judge_response}")
         return None, None, None
 
     ranking = parsed_json.get("ranking")
@@ -133,18 +136,18 @@ def parse_judge_output(
     if not isinstance(ranking, list) or not all(
         isinstance(item, str) for item in ranking
     ):
-        print(
-            f"Warning: Judge output 'ranking' key is not a list of strings: {ranking}"
+        logger.warning(
+            f"Judge output 'ranking' key is not a list of strings: {ranking}"
         )
         ranking = None
     if not isinstance(rationale, str):
-        print(f"Warning: Judge output 'rationale' key is not a string: {rationale}")
+        logger.warning(f"Judge output 'rationale' key is not a string: {rationale}")
         rationale = None
     if not isinstance(correct_models, list) or not all(
         isinstance(item, str) for item in correct_models
     ):
-        print(
-            f"Warning: Judge output 'correct_models' key is not a list of strings: {correct_models}"
+        logger.warning(
+            f"Judge output 'correct_models' key is not a list of strings: {correct_models}"
         )
         correct_models = None
 

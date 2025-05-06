@@ -1,8 +1,11 @@
 import json
+import logging
 import re
 from typing import Any, Optional
 
 from json_repair import repair_json
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_last_json(text: Optional[str]) -> Optional[str]:
@@ -99,8 +102,8 @@ def parse_llm_json_output(
     # 3. If no JSON string could be extracted, return error
     if not extracted_json_str:
         if verbose_errors:
-            print(
-                f"Warning: Could not extract JSON object or markdown block from: {llm_output[:100]}..."
+            logger.warning(
+                f"Could not extract JSON object or markdown block from: {llm_output[:100]}..."
             )
         return return_on_error
 
@@ -115,15 +118,15 @@ def parse_llm_json_output(
             return parsed_json
         else:
             if verbose_errors:
-                print(
-                    f"Warning: Parsed JSON type ({type(parsed_json).__name__}) does not match expected type ({expect_type.__name__}). Output: {llm_output[:100]}..."
+                logger.warning(
+                    f"Parsed JSON type ({type(parsed_json).__name__}) does not match expected type ({expect_type.__name__}). Output: {llm_output[:100]}..."
                 )
             return return_on_error
 
     except (json.JSONDecodeError, TypeError, Exception) as e:
         # Catch potential errors during repair or final loads
         if verbose_errors:
-            print(
+            logger.error(
                 f"Error parsing LLM JSON output: {e}\nRepaired string snippet: {repaired_json_str[:100]}...\nRaw output snippet: {llm_output[:100]}..."
             )
         return return_on_error

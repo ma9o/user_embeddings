@@ -1,7 +1,10 @@
 import json
+import logging
 from pathlib import Path
 
 PROMPT_DIR = Path(__file__).parent.parent.parent.parent.parent / "prompts"
+
+logger = logging.getLogger(__name__)
 
 
 def load_prompt(prompt_name: str, version: str = "latest") -> tuple[str, str]:
@@ -19,7 +22,7 @@ def load_prompt(prompt_name: str, version: str = "latest") -> tuple[str, str]:
 
     version_str = prompt_path.stem.split(".")[0]
 
-    print(f"Loading prompt {prompt_name} from {prompt_path}")
+    logger.info(f"Loading prompt {prompt_name} from {prompt_path}")
 
     with open(prompt_path, "r") as f:
         return f.read(), version_str

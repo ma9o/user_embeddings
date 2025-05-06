@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json  # For parsing violations
+import logging
 
 # import time  # No longer needed here
 from pathlib import Path
@@ -39,6 +40,9 @@ from user_embeddings.utils.llm.workflow_executor import (
     validate_workflow,  # Shared
 )
 
+logger = logging.getLogger(__name__)
+
+
 load_dotenv()
 project_root = Path(__file__).resolve().parent.parent
 
@@ -52,7 +56,7 @@ DEFAULT_EVAL_MODEL = "google/gemini-2.5-flash-preview"
 
 # --- Argument Parser ---
 parser = argparse.ArgumentParser(
-    description="""Evaluate a single LLM's output against constraints for a *single* sample, appending results.     
+    description="""Evaluate a single LLM's output against constraints for a *single* sample, appending results.
 
 This script can be used iteratively for prompt refinement. For example, to refine the 'all_in_one' prompt:
 1. Run: `python -m evaluation.prompt_refinement --workflow concurrent_intent_koa --judge-prompt-module all_in_one`
@@ -60,11 +64,11 @@ This script can be used iteratively for prompt refinement. For example, to refin
 3. If violations exist, analyze the 'violated_constraints'.
 4. Create a new prompt(s) version file(s) (e.g., `prompts/intent_only/v2.txt`, `prompts/koa_only/v2.txt`) with minimal changes to address the observed violations.
 4.1 Make sure to update both the workflow and the judge prompts!
-5. Rerun the script. The system automatically picks up the latest prompt versions. 
+5. Rerun the script. The system automatically picks up the latest prompt versions.
 5.1 If no violations were found in the previous run, the script will select another random sample of data to evaluate; otherwise, it will use the same sample as in the previous run.
 6. Repeat steps 2-5 until violations are eliminated or the maximum number of iterations is reached.
 
-AI AGENT: 
+AI AGENT:
 - When instructed to run this eval X times, X is the number of iterations. Do not use a for loop, run them one by one.
 - You will be in charge of creating the new prompt versions, don't be shy.
 - IMPORTANT: When creating a new prompt version, make sure to both explain the incremental constraint and to include a new verbatim example of valid output for the constraint (leverage the 0-shot capabilities of the LLM).
@@ -113,10 +117,17 @@ async def main():
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     # --- Workflow Setup ---
     selected_workflow_name = args.workflow
     selected_workflow = WORKFLOWS[selected_workflow_name]
-    print(
+    logger.info(
         f"Using workflow '{selected_workflow_name}' for model '{args.model_to_evaluate}'"
     )
 
@@ -127,7 +138,7 @@ async def main():
         available_output_models=AVAILABLE_OUTPUT_MODELS,  # Pass for validation
     )
     if not is_valid:
-        print("Workflow validation failed. Exiting.")
+        logger.error("Workflow validation failed. Exiting.")
         return
 
     # --- Judge Constraints Prompt Setup ---
@@ -136,13 +147,13 @@ async def main():
     # But since we made it required=True above, argparse handles this.
     # Keep the check if it's in AVAILABLE_PROMPTS
     if judge_prompt_module_name not in AVAILABLE_PROMPTS:
-        print(
-            f"Error: Judge constraints prompt module '{judge_prompt_module_name}' not found."
+        logger.error(
+            f"Judge constraints prompt module '{judge_prompt_module_name}' not found."
         )
         return
     # Extract only the prompt text
     judge_constraints_prompt_text = AVAILABLE_PROMPTS[judge_prompt_module_name][0]
-    print(
+    logger.info(
         f"Using judge constraints prompt: '{judge_prompt_module_name}' (Version: {AVAILABLE_PROMPTS[judge_prompt_module_name][1]})"
     )
 
@@ -152,21 +163,21 @@ async def main():
     if args.input_data_file:
         input_source_path = args.input_data_file
         if not input_source_path.is_file():
-            print(f"Error: Specified input data file not found: {input_source_path}")
+            logger.error(f"Specified input data file not found: {input_source_path}")
             await c.aclose()
             return
         input_data_stem = input_source_path.stem
-        print(f"Using specific input file: {input_source_path}")
+        logger.info(f"Using specific input file: {input_source_path}")
     else:
         input_source_path = args.input_data_dir
         if not input_source_path.is_dir():
-            print(
-                f"Error: Specified input data directory not found: {input_source_path}"
+            logger.error(
+                f"Specified input data directory not found: {input_source_path}"
             )
             await c.aclose()
             return
         input_data_stem = f"combined_{input_source_path.name}"
-        print(f"Sampling from CSV files in directory: {input_source_path}")
+        logger.info(f"Sampling from CSV files in directory: {input_source_path}")
 
     # --- Construct Output Filename (needed for seed logic) ---
     try:
@@ -181,9 +192,9 @@ async def main():
             append=True,
             seed=None,  # Pass None for seed when appending
         )
-        print(f"Target output file: {output_file_path}")
+        logger.info(f"Target output file: {output_file_path}")
     except ValueError as e:
-        print(f"Error generating filename: {e}")
+        logger.error(f"Error generating filename: {e}")
         await c.aclose()
         return
 
@@ -192,13 +203,13 @@ async def main():
     try:
         effective_seed = determine_effective_seed(args.seed, output_file_path)
     except RuntimeError as e:
-        print(f"Error determining seed: {e}")
+        logger.error(f"Error determining seed: {e}")
         await c.aclose()
         return
 
     # --- Load Single Sample ---
     # effective_seed is now guaranteed to have a value
-    print(f"Using effective seed: {effective_seed} to select sample")
+    logger.info(f"Using effective seed: {effective_seed} to select sample")
 
     # Load the single sample (using constant NUM_SAMPLES)
     sample_df = load_and_sample_data(
@@ -207,7 +218,7 @@ async def main():
         effective_seed,  # Use constant and effective_seed
     )
     if sample_df is None or sample_df.is_empty():
-        print("Error: Failed to load the single sample.")
+        logger.error("Failed to load the single sample.")
         await c.aclose()
         return
 
@@ -215,7 +226,7 @@ async def main():
     # print(f"Results will be appended to: {output_file_path}") # Removed redundant print
 
     # --- Run Model Workflow ---
-    print(
+    logger.info(
         f"Running workflow '{selected_workflow_name}' for model '{args.model_to_evaluate}' on the single sample..."
     )
     # Note: run_and_parse_test_models now passes AVAILABLE_OUTPUT_MODELS to the executor
@@ -247,7 +258,7 @@ async def main():
     )
 
     if not results_data:
-        print("Error: Failed to aggregate results.")
+        logger.error("Failed to aggregate results.")
         await c.aclose()
         return
 
@@ -256,38 +267,45 @@ async def main():
     violations_json_str = single_result_dict.get("violated_constraints", "{}")
     violation_count = single_result_dict.get("violation_count", -1)
 
-    print("\n--- Constraint Violation Check ---")
+    logger.info("\n--- Constraint Violation Check ---")
     if violation_count > 0 and violations_json_str != "ERROR: Parse Failed":
         try:
             violations_dict = json.loads(violations_json_str)
             if violations_dict:  # Check if dict is not empty
-                print(f"Found {violation_count} violation(s):")
+                logger.info(f"Found {violation_count} violation(s):")
                 for constraint_id, explanation in violations_dict.items():
-                    print(f"  - ID: {constraint_id}")
-                    print(f"    Explanation: {explanation}")
+                    logger.info(f"  - ID: {constraint_id}")
+                    logger.info(f"    Explanation: {explanation}")
             else:
                 # This case might happen if count > 0 but parsing yielded empty dict somehow
-                print(
+                logger.info(
                     "No violations found (parsed dictionary was empty despite count > 0)."
                 )
         except json.JSONDecodeError:
-            print(
-                f"Error: Could not parse violations JSON string: {violations_json_str}"
+            logger.error(
+                f"Could not parse violations JSON string: {violations_json_str}"
             )
         except Exception as e:
-            print(f"An unexpected error occurred while processing violations: {e}")
+            logger.error(
+                f"An unexpected error occurred while processing violations: {e}"
+            )
+            logger.exception("Exception details:")
     elif violation_count == 0:
-        print("No violations found. Good job!")
+        logger.info("No violations found. Good job!")
     else:  # violation_count == -1 or ERROR string
-        print("Could not determine violations (Judge failed or parse error).")
-        print(f"Raw judge output: {single_result_dict.get('judge_raw_output', 'N/A')}")
+        logger.warning("Could not determine violations (Judge failed or parse error).")
+        logger.warning(
+            f"Raw judge output: {single_result_dict.get('judge_raw_output', 'N/A')}"
+        )
 
     # --- Append Result to CSV ---
     results_df = pl.DataFrame(results_data)  # DataFrame with single row
     save_single_row_results_appending(results_df, output_file_path)
 
-    print(f"\nSingle sample constraint evaluation complete for seed {effective_seed}.")
-    print(f"Results appended to {output_file_path}")
+    logger.info(
+        f"\nSingle sample constraint evaluation complete for seed {effective_seed}."
+    )
+    logger.info(f"Results appended to {output_file_path}")
 
     await c.aclose()
 

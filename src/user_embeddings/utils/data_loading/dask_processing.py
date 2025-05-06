@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import dask.dataframe as dd
@@ -17,6 +18,8 @@ from .reddit_helpers import (
     build_nested_thread,
     format_submission_context,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _get_ancestors(target_comment_id: str, comment_map: pd.DataFrame) -> Set[str]:
@@ -251,13 +254,13 @@ def process_submission_group(
     if not isinstance(submission_id_full, str) or not submission_id_full.startswith(
         "t3_"
     ):
-        print(f"Warning: Invalid link_id found in group: {submission_id_full}")
+        logger.warning(f"Invalid link_id found in group: {submission_id_full}")
         return None
 
     try:
         submission_id_short = submission_id_full.split("_", 1)[1]
     except IndexError:
-        print(f"Warning: Could not extract short ID from link_id: {submission_id_full}")
+        logger.warning(f"Could not extract short ID from link_id: {submission_id_full}")
         return None
 
     # Extract submission data directly from the first row
@@ -288,8 +291,8 @@ def process_submission_group(
 
     # Check if submission data seems valid (at least title is not N/A)
     if submission_data["title"] == "N/A":
-        print(
-            f"Warning: Submission data (title) appears missing for group {submission_id_short}. Skipping."
+        logger.warning(
+            f"Submission data (title) appears missing for group {submission_id_short}. Skipping."
         )
         return None
 
@@ -313,8 +316,8 @@ def process_submission_group(
         "created_utc_x" if "created_utc_x" in comment_map.columns else "created_utc"
     )
     if created_utc_col not in comment_map.columns:
-        print(
-            f"Warning: '{created_utc_col}' column missing in comment data for submission {submission_id_short}. Thread structure might be incorrect."
+        logger.warning(
+            f"'{created_utc_col}' column missing in comment data for submission {submission_id_short}. Thread structure might be incorrect."
         )
         # Add a dummy column if needed for the helper function to run
         comment_map[created_utc_col] = 0
@@ -338,8 +341,8 @@ def process_submission_group(
         col for col in base_cols if col not in comment_map_for_build.columns
     ]
     if missing_base_cols:
-        print(
-            f"Error: Cannot build thread for {submission_id_short}. Missing essential columns after potential rename: {missing_base_cols}"
+        logger.error(
+            f"Cannot build thread for {submission_id_short}. Missing essential columns after potential rename: {missing_base_cols}"
         )
         return None
 
@@ -400,7 +403,9 @@ def generate_user_context(
     relevant_link_ids = _find_relevant_link_ids(ddf_comments, user_id)
 
     if not relevant_link_ids:
-        print(f"No comments found for user '{user_id}'. Returning empty DataFrame.")
+        logger.info(
+            f"No comments found for user '{user_id}'. Returning empty DataFrame."
+        )
         meta_empty = pd.DataFrame(
             {
                 "submission_id": pd.Series(dtype="string"),
@@ -433,10 +438,10 @@ def generate_user_context(
     # Group by link_id. Need to ensure link_id exists after merge.
     # If merge adds suffixes, use 'link_id_x' or similar.
     link_id_col_merged = "link_id_x" if "link_id_x" in ddf_merged.columns else "link_id"
-    print(f"Grouping filtered merged data by '{link_id_col_merged}'...")
+    logger.info(f"Grouping filtered merged data by '{link_id_col_merged}'...")
     grouped_merged_comments = ddf_merged.groupby(link_id_col_merged)
 
-    print(
+    logger.info(
         "Applying context generation logic to filtered groups (constructing Dask graph)..."
     )
     user_context_ddf = grouped_merged_comments.apply(
@@ -445,75 +450,5 @@ def generate_user_context(
         meta=meta_apply,
     ).reset_index(drop=True)
 
-    print("Dask graph for context generation constructed successfully.")
+    logger.info("Dask graph for context generation constructed successfully.")
     return user_context_ddf
-
-
-# --- Example Usage ---
-# (Example usage remains the same, potentially remove if not needed)
-# if __name__ == "__main__":
-#     from dask.distributed import Client
-#     import dask.dataframe as dd
-#     import time
-#
-#     # --- Setup Dask Client ---
-#     # client = Client(n_workers=4, threads_per_worker=2, memory_limit='4GB')
-#     # print(f"Dask dashboard link: {client.dashboard_link}")
-#
-#     # --- Load Sample Data (Replace with your actual data loading) ---
-#     print("Creating sample Dask DataFrames...")
-#     comments_data = {
-#         'id': [f'c{i}' for i in range(10)] + ['c10', 'c11'],
-#         'author': ['user_a', 'user_b', 'user_a', 'user_c', 'user_b', 'user_a', 'user_d', 'user_a', 'user_b', 'user_c', 'user_a', 'user_b'],
-#         'link_id': ['t3_s1'] * 5 + ['t3_s2'] * 5 + ['t3_s1', 't3_s2'], # Comments spread across 2 submissions
-#         'parent_id': ['t3_s1', 't1_c0', 't1_c1', 't3_s1', 't1_c3', 't3_s2', 't1_c5', 't1_c6', 't3_s2', 't1_c8', 't1_c2', 't1_c7'], # Sample hierarchy
-#         'body': [f'Comment body {i}' for i in range(12)],
-#         'created_utc': [1678886400 + i * 10 for i in range(12)] # Timestamps
-#     }
-#     submissions_data = {
-#         'id': ['s1', 's2', 's3'], # s3 has no comments in sample
-#         'title': ['Submission Title 1', 'Submission Title 2', 'Submission Title 3'],
-#         'selftext': ['Body of submission 1.', 'Link post content here.', ''],
-#         'is_self': [True, True, False] # s3 is a link post
-#     }
-#
-#     comments_pdf = pd.DataFrame(comments_data)
-#     submissions_pdf = pd.DataFrame(submissions_data)
-#
-#     # Create Dask DataFrames (e.g., 2 partitions)
-#     comments_ddf = dd.from_pandas(comments_pdf, npartitions=2)
-#     submissions_ddf = dd.from_pandas(submissions_pdf, npartitions=1)
-#     print("Sample DataFrames created.")
-#
-#     # --- Define Target User ---
-#     target_user = "user_a"
-#
-#     # --- Generate Context ---
-#     start_time = time.time()
-#     print(f"Generating context for user: {target_user}")
-#     try:
-#         context_ddf = generate_user_context(target_user, comments_ddf, submissions_ddf)
-#
-#         # --- Compute and Display Results ---
-#         print("Computing the result...")
-#         result_pdf = context_ddf.compute()
-#         end_time = time.time()
-#
-#         print("\n--- Generated Context ---")
-#         if not result_pdf.empty:
-#             for index, row in result_pdf.iterrows():
-#                 print(f"Submission ID: {row['submission_id']}")
-#                 print(f"User Comment IDs: {row['user_comment_ids']}")
-#                 print(f"Formatted Context:\n{row['formatted_context']}")
-#                 print("-" * 20)
-#         else:
-#             print(f"No comments found for user '{target_user}' or context could not be generated.")
-#
-#         print(f"Total execution time: {end_time - start_time:.2f} seconds")
-#
-#     except ValueError as e:
-#         print(f"Execution Error: {e}")
-#     except Exception as e:
-#         print(f"An unexpected error occurred: {e}")
-#     finally:
-#         pass

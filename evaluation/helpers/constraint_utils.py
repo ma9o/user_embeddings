@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel
@@ -15,6 +16,8 @@ from user_embeddings.utils.llm.workflow_executor import (
     _run_single_prompt,
 )
 
+logger = logging.getLogger(__name__)
+
 # --- Constraint Specific Helpers ---
 
 
@@ -29,7 +32,7 @@ async def run_constraint_judge_evaluation(
     """Runs the constraint judge model for each sample using its final judge input."""
     judge_tasks = []
     judge_task_metadata = []  # Store sample index
-    print(f"Preparing constraint judge tasks for model '{model_to_evaluate}'...")
+    logger.info(f"Preparing constraint judge tasks for model '{model_to_evaluate}'...")
 
     for i, sample_data in enumerate(sample_workflow_results):
         model_output_for_judge = sample_data.get("final_judge_inputs", {}).get(
@@ -41,7 +44,7 @@ async def run_constraint_judge_evaluation(
             or not isinstance(model_output_for_judge, str)
             or model_output_for_judge.startswith("ERROR:")
         ):
-            print(
+            logger.warning(
                 f"Skipping constraint judge for sample {i}, model '{model_to_evaluate}': Invalid or missing final judge input ('{str(model_output_for_judge)[:50]}...')."
             )
             continue
@@ -58,14 +61,14 @@ async def run_constraint_judge_evaluation(
 
     judge_responses_raw = []
     if judge_tasks:
-        print(
+        logger.info(
             f"Running {len(judge_tasks)} constraint judge tasks concurrently for model '{model_to_evaluate}'..."
         )
         judge_responses_raw = await tqdm_asyncio.gather(
             *judge_tasks, desc=f"Running Constraint Judge ({judge_model})", unit="task"
         )
     else:
-        print("No constraint judge tasks to run.")
+        logger.info("No constraint judge tasks to run.")
 
     judge_response_map: Dict[int, str] = {}  # Map sample_index -> raw judge response
     for i, raw_response in enumerate(judge_responses_raw):
@@ -89,7 +92,7 @@ def aggregate_constraint_results(
     available_prompts: Dict[str, Tuple[str, str]],
 ) -> List[Dict[str, Any]]:
     """Aggregates results for the constraint violation evaluation including versions."""
-    print("Aggregating constraint evaluation results (including versions)...")
+    logger.info("Aggregating constraint evaluation results (including versions)...")
     results_data = []
     all_task_ids_in_workflow = set(
         task["prompt"] for stage in workflow for task in stage.get("tasks", [])

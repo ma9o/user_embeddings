@@ -1,4 +1,5 @@
 import glob
+import logging
 import os
 import sys
 import time
@@ -9,6 +10,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+
+logger = logging.getLogger(__name__)
 
 # Ensure the utils directory is in the Python path for import
 # This assumes data_loading.py is in the tests/helpers/ directory
@@ -23,8 +26,8 @@ try:
         read_single_zst_ndjson_chunked,
     )
 except ImportError as e:
-    print(
-        f"ERROR: Failed to import from user_embeddings.utils.data_loading.zst_io. Check sys.path and file existence. Error: {e}"
+    logger.error(
+        f"Failed to import from user_embeddings.utils.data_loading.zst_io. Check sys.path and file existence. Error: {e}"
     )
     # Optionally re-raise or handle appropriately
     raise
@@ -81,8 +84,8 @@ def _clean_cast_validate_chunk(
                     # Standard numpy dtypes
                     chunk_df[col] = chunk_df[col].astype(dtype)
             except (ValueError, TypeError, OverflowError) as e:
-                print(
-                    f"WARNING: Could not cast column '{col}' (dtype: {chunk_df[col].dtype}) to {dtype} in {data_type_name} chunk {chunk_index}. Error: {e}. Filling with NA/None."
+                logger.warning(
+                    f"Could not cast column '{col}' (dtype: {chunk_df[col].dtype}) to {dtype} in {data_type_name} chunk {chunk_index}. Error: {e}. Filling with NA/None."
                 )
                 # Determine fill value again based on target type
                 if (
@@ -111,8 +114,8 @@ def _clean_cast_validate_chunk(
                     else:
                         chunk_df[col] = chunk_df[col].astype(dtype)
                 except Exception as e2:
-                    print(
-                        f"ERROR: Failed second cast attempt for '{col}' to {dtype} after filling. Error: {e2}. Leaving as object."
+                    logger.error(
+                        f"Failed second cast attempt for '{col}' to {dtype} after filling. Error: {e2}. Leaving as object."
                     )
                     chunk_df[col] = chunk_df[col].astype("object")  # Fallback
 
@@ -124,8 +127,8 @@ def _clean_cast_validate_chunk(
             if chunk_df["edited"].dtype != pd.StringDtype():
                 chunk_df["edited"] = chunk_df["edited"].astype(pd.StringDtype())
         except Exception as e:
-            print(
-                f"ERROR: Failed to cast 'edited' column to StringDtype in chunk {chunk_index}. Error: {e}"
+            logger.error(
+                f"Failed to cast 'edited' column to StringDtype in chunk {chunk_index}. Error: {e}"
             )
             # If conversion fails even to string, maybe drop or return None?
             # Returning None to skip the chunk is safer.
@@ -139,11 +142,11 @@ def _clean_cast_validate_chunk(
             mismatched_cols.append((col, current_dtypes[col], target_dtype))
 
     if mismatched_cols:
-        print(
-            f"ERROR: Dtype mismatch after casting in chunk {chunk_index} for {data_type_name}."
+        logger.error(
+            f"Dtype mismatch after casting in chunk {chunk_index} for {data_type_name}."
         )
         for col, current, target in mismatched_cols:
-            print(f"  Column '{col}': Expected {target}, Got {current}")
+            logger.error(f"  Column '{col}': Expected {target}, Got {current}")
         # Decide: return None to skip chunk, or raise error?
         # Let's return None for now to allow processing to continue.
         return None
@@ -163,7 +166,7 @@ def _process_zst_to_parquet(
     converts to Arrow table using pa_schema, and writes to a Parquet file.
     Returns the total number of rows written.
     """
-    print(
+    logger.info(
         f"Processing {data_type_name} from {os.path.basename(zst_file_path)} using schema and caching to {cache_filepath}..."
     )
     writer = None
@@ -174,14 +177,14 @@ def _process_zst_to_parquet(
 
     try:
         # Use the provided pa_schema to initialize the writer
-        print(
+        logger.info(
             f"Creating Parquet writer for: {cache_filepath} with provided schema:\n{pa_schema}"
         )
         try:
             writer = pq.ParquetWriter(cache_filepath, pa_schema)
         except Exception as e:
-            print(
-                f"ERROR: Failed to create Parquet writer for {cache_filepath} with provided schema: {e}"
+            logger.error(
+                f"Failed to create Parquet writer for {cache_filepath} with provided schema: {e}"
             )
             raise  # Cannot proceed without writer
 
@@ -195,7 +198,7 @@ def _process_zst_to_parquet(
             if (
                 processed_chunk is None
             ):  # Skip empty or problematic chunks after cleaning
-                print(
+                logger.info(
                     f"Skipping invalid or empty processed chunk {i} for {data_type_name}."
                 )
                 continue
@@ -207,11 +210,11 @@ def _process_zst_to_parquet(
                     processed_chunk, schema=pa_schema, preserve_index=False
                 )
             except Exception as e:
-                print(
-                    f"ERROR: Error converting processed {data_type_name} chunk {i} to Arrow Table using provided schema: {e}"
+                logger.error(
+                    f"Error converting processed {data_type_name} chunk {i} to Arrow Table using provided schema: {e}"
                 )
-                print(f"Processed chunk {i} dtypes:\n{processed_chunk.dtypes}")
-                print(f"Expected Arrow schema:\n{pa_schema}")
+                logger.error(f"Processed chunk {i} dtypes:\n{processed_chunk.dtypes}")
+                logger.error(f"Expected Arrow schema:\n{pa_schema}")
                 # processed_chunk.to_csv(f"problem_chunk_{data_type_name}_{i}.csv") # Optional debug output
                 continue  # Skip this chunk
 
@@ -220,8 +223,8 @@ def _process_zst_to_parquet(
                 writer.write_table(table)
                 total_rows_written += len(processed_chunk)
             except Exception as e:
-                print(
-                    f"ERROR: Failed to write chunk {i} to Parquet file {cache_filepath}: {e}"
+                logger.error(
+                    f"Failed to write chunk {i} to Parquet file {cache_filepath}: {e}"
                 )
                 # Decide: continue or raise? Let's continue but log error.
 
@@ -229,12 +232,12 @@ def _process_zst_to_parquet(
         if writer:
             try:
                 writer.close()
-                print(
+                logger.info(
                     f"Closed Parquet writer for {cache_filepath}. Total rows written: {total_rows_written}"
                 )
             except Exception as e:
-                print(
-                    f"ERROR: Failed to close Parquet writer for {cache_filepath}: {e}"
+                logger.error(
+                    f"Failed to close Parquet writer for {cache_filepath}: {e}"
                 )
 
     return total_rows_written
@@ -244,7 +247,7 @@ def _validate_and_cast_ddf(
     ddf: dd.DataFrame, meta_df: pd.DataFrame, pa_schema: pa.Schema, data_type_name: str
 ) -> dd.DataFrame:
     """Validates schema, adds missing columns, and casts types for a loaded Dask DataFrame."""
-    print(f"Validating and casting loaded Dask DataFrame for {data_type_name}...")
+    logger.info(f"Validating and casting loaded Dask DataFrame for {data_type_name}...")
     # Convert meta dtypes to a dictionary suitable for astype (handle Pandas specific types)
     meta_dtypes_dict = {}
     for col, dtype in meta_df.dtypes.items():
@@ -256,8 +259,8 @@ def _validate_and_cast_ddf(
                     arrow_type
                 ) or pa.types.is_large_string(arrow_type)
             except KeyError:
-                print(
-                    f"Warning: Column '{col}' found in meta_df but not in pa_schema. Assuming basic string."
+                logger.warning(
+                    f"Column '{col}' found in meta_df but not in pa_schema. Assuming basic string."
                 )
                 is_arrow_string = False
             meta_dtypes_dict[col] = "string[pyarrow]" if is_arrow_string else "string"
@@ -273,8 +276,8 @@ def _validate_and_cast_ddf(
         col: dtype for col, dtype in meta_dtypes_dict.items() if col not in ddf.columns
     }
     if cols_to_add:
-        print(
-            f"WARNING: Columns missing from loaded Dask DF for {data_type_name}: {list(cols_to_add.keys())}. Adding them with NA/None."
+        logger.warning(
+            f"Columns missing from loaded Dask DF for {data_type_name}: {list(cols_to_add.keys())}. Adding them with NA/None."
         )
         for col, dtype in cols_to_add.items():
             # Determine fill value based on target Dask/Pandas type
@@ -284,8 +287,8 @@ def _validate_and_cast_ddf(
                 # Apply correct type to new column
                 ddf[col] = ddf[col].astype(dtype)
             except Exception as e:
-                print(
-                    f"ERROR: Failed to cast newly added column '{col}' to {dtype}: {e}. Setting as object."
+                logger.error(
+                    f"Failed to cast newly added column '{col}' to {dtype}: {e}. Setting as object."
                 )
                 ddf[col] = ddf[col].astype("object")  # Fallback?
 
@@ -335,21 +338,21 @@ def _validate_and_cast_ddf(
             if col in current_dtypes and not is_match:
                 types_to_cast[col] = target_dtype
             elif col not in current_dtypes:
-                print(
-                    f"ERROR: Column '{col}' still missing after attempted add for {data_type_name}."
+                logger.error(
+                    f"Column '{col}' still missing after attempted add for {data_type_name}."
                 )
 
         if types_to_cast:
-            print(f"Casting {data_type_name} columns to match meta: {types_to_cast}")
+            logger.info(f"Casting {data_type_name} columns to match meta: {types_to_cast}")
             # Apply casts - Dask handles this lazily
             ddf = ddf.astype(types_to_cast)
 
     except Exception as e:
-        print(
-            f"ERROR: Failed during dtype comparison/casting preparation for {data_type_name}: {e}"
+        logger.error(
+            f"Failed during dtype comparison/casting preparation for {data_type_name}: {e}"
         )
-        print(f"Dask dtypes: {ddf.dtypes}")
-        print(f"Meta dtypes dict: {meta_dtypes_dict}")
+        logger.error(f"Dask dtypes: {ddf.dtypes}")
+        logger.error(f"Meta dtypes dict: {meta_dtypes_dict}")
         pytest.fail(f"Dtype casting setup failed for {data_type_name}: {e}")
 
     # Final check on columns vs meta after all operations
@@ -360,14 +363,14 @@ def _validate_and_cast_ddf(
             f"Loaded {data_type_name} final columns {final_columns} "
             f"do not match meta {meta_columns} after processing."
         )
-        print(f"ERROR: {mismatch_msg}")
-        print(f"ERROR: Dask dtypes: {ddf.dtypes}")
-        print(f"ERROR: Meta dtypes: {meta_df.dtypes}")
-        print(f"Columns in DDF but not meta: {set(final_columns) - set(meta_columns)}")
-        print(f"Columns in meta but not DDF: {set(meta_columns) - set(final_columns)}")
+        logger.error(f"{mismatch_msg}")
+        logger.error(f"Dask dtypes: {ddf.dtypes}")
+        logger.error(f"Meta dtypes: {meta_df.dtypes}")
+        logger.error(f"Columns in DDF but not meta: {set(final_columns) - set(meta_columns)}")
+        logger.error(f"Columns in meta but not DDF: {set(meta_columns) - set(final_columns)}")
         pytest.fail(mismatch_msg)  # Use pytest.fail in test helpers
 
-    print(
+    logger.info(
         f"Successfully validated and cast Dask DataFrame for {data_type_name}. Final Columns: {list(ddf.columns)}, Final Dtypes: {ddf.dtypes.to_dict()}"
     )
     return ddf
@@ -414,47 +417,47 @@ def load_or_create_cached_ddf(
 
     # Select the first file to process (consistent with previous logic)
     zst_file_to_process = zst_files[0]
-    print(
+    logger.info(
         f"Target ZST file for caching/loading: {os.path.basename(zst_file_to_process)}"
     )
 
     # Determine cache filename based on the source ZST filename
     base_filename = os.path.splitext(os.path.basename(zst_file_to_process))[0]
     cache_filepath = os.path.join(cache_dir, f"{base_filename}.parquet")
-    print(f"Expected cache file path: {cache_filepath}")
+    logger.info(f"Expected cache file path: {cache_filepath}")
 
     ddf = None  # Initialize ddf
 
     if os.path.exists(cache_filepath):
-        print(f"Loading {data_type_name} from cached Parquet file: {cache_filepath}")
+        logger.info(f"Loading {data_type_name} from cached Parquet file: {cache_filepath}")
         try:
             start_time = time.time()
             # Load from cache
             ddf_loaded = dd.read_parquet(cache_filepath)
             end_time = time.time()
-            print(
+            logger.info(
                 f"Loaded {data_type_name} cache in {end_time - start_time:.2f}s. Initial Columns: {ddf_loaded.columns}"
             )
 
             # Validate and cast the loaded DataFrame against the expected meta schema
             ddf = _validate_and_cast_ddf(ddf_loaded, meta_df, pa_schema, data_type_name)
-            print(f"Validated and cast loaded cache for {data_type_name}.")
+            logger.info(f"Validated and cast loaded cache for {data_type_name}.")
             # return ddf # Return validated ddf
 
         except Exception as e:
-            print(
-                f"ERROR: Failed to load or validate cached Parquet file {cache_filepath}: {e}. Attempting to rebuild."
+            logger.error(
+                f"Failed to load or validate cached Parquet file {cache_filepath}: {e}. Attempting to rebuild."
             )
             ddf = None  # Force rebuild
             # Optionally remove the corrupted cache file
             try:
                 os.remove(cache_filepath)
             except OSError as remove_err:
-                print(
-                    f"Warning: Failed to remove corrupted cache file {cache_filepath}: {remove_err}"
+                logger.warning(
+                    f"Failed to remove corrupted cache file {cache_filepath}: {remove_err}"
                 )
     else:
-        print(f"Cached Parquet file not found: {cache_filepath}")
+        logger.info(f"Cached Parquet file not found: {cache_filepath}")
         ddf = None  # Signal to create cache
 
     # --- Cache not found, failed to load/validate, or rebuild forced ---
@@ -464,12 +467,12 @@ def load_or_create_cached_ddf(
         # if not zst_files:
         #     raise ValueError(f"No ZST files matching '{file_pattern}' found in {data_path}")
 
-        print(
+        logger.info(
             f"Processing {data_type_name} from ZST file: {os.path.basename(zst_file_to_process)} to create cache: {cache_filepath}"
         )
         # Process only the first file for caching for speed in testing -- Redundant comment
         # zst_file_to_process = zst_files[0]
-        # print(f"Processing ONLY the first file for caching: {os.path.basename(zst_file_to_process)}")
+        # logger.info(f"Processing ONLY the first file for caching: {os.path.basename(zst_file_to_process)}")
 
         start_time = time.time()
         total_rows = _process_zst_to_parquet(
@@ -482,33 +485,33 @@ def load_or_create_cached_ddf(
         end_time = time.time()
 
         if total_rows > 0 and os.path.exists(cache_filepath):
-            print(
+            logger.info(
                 f"Successfully created Parquet cache for {data_type_name} ({total_rows} rows) at {cache_filepath} in {end_time - start_time:.2f}s"
             )
             # Load the newly created cache file
-            print(f"Loading newly created {data_type_name} cache...")
+            logger.info(f"Loading newly created {data_type_name} cache...")
             try:
                 ddf_loaded = dd.read_parquet(cache_filepath)
                 # Validate the newly created cache file against meta
                 ddf = _validate_and_cast_ddf(
                     ddf_loaded, meta_df, pa_schema, data_type_name
                 )
-                print(f"Validated newly created cache. Final Columns: {ddf.columns}")
+                logger.info(f"Validated newly created cache. Final Columns: {ddf.columns}")
                 # return ddf
             except Exception as e:
-                print(
-                    f"ERROR: Failed to load or validate newly created cache file {cache_filepath}: {e}. Handling error."
+                logger.error(
+                    f"Failed to load or validate newly created cache file {cache_filepath}: {e}. Handling error."
                 )
                 ddf = None  # Reset ddf on load/validation failure
         else:
-            print(
-                f"Warning: Parquet cache creation for {data_type_name} resulted in 0 rows or file missing. Check source/processing."
+            logger.warning(
+                f"Parquet cache creation for {data_type_name} resulted in 0 rows or file missing. Check source/processing."
             )
             ddf = None  # Ensure empty ddf is created
 
     # If ddf is still None (creation/loading/validation failed), create an empty one matching meta
     if ddf is None:
-        print(
+        logger.info(
             f"Creating empty Dask DataFrame for {data_type_name} matching meta schema."
         )
         # Create empty Pandas DataFrame with correct columns and types from meta_df
@@ -516,7 +519,7 @@ def load_or_create_cached_ddf(
             meta_df.dtypes.to_dict()
         )
         ddf = dd.from_pandas(empty_pdf, npartitions=1)
-        print(
+        logger.info(
             f"Created empty DataFrame with columns: {ddf.columns} and types: {ddf.dtypes.to_dict()}"
         )
 

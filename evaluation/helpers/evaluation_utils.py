@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -19,6 +20,8 @@ from user_embeddings.utils.llm.workflow_executor import (
     run_workflow_on_samples,
 )
 
+logger = logging.getLogger(__name__)
+
 # --- Shared Evaluation Helpers ---
 
 
@@ -29,68 +32,68 @@ def load_and_sample_data(
     full_df = None
     required_column = "formatted_context"
     if input_source_path.is_file():
-        print(f"Loading data from file: {input_source_path}...")
+        logger.info(f"Loading data from file: {input_source_path}...")
         try:
             full_df = pl.read_csv(input_source_path)
             if required_column not in full_df.columns:
-                print(
-                    f"Error: '{required_column}' column not found in {input_source_path}"
+                logger.error(
+                    f"'{required_column}' column not found in {input_source_path}"
                 )
                 return None
         except Exception as e:
-            print(f"Error reading CSV file {input_source_path}: {e}")
+            logger.error(f"Error reading CSV file {input_source_path}: {e}")
             return None
     elif input_source_path.is_dir():
-        print(f"Loading data from directory: {input_source_path}...")
+        logger.info(f"Loading data from directory: {input_source_path}...")
         glob_pattern = "test_output_*.csv"
         all_files = list(input_source_path.glob(glob_pattern))
         if not all_files:
-            print(f"No files matching '{glob_pattern}' found in {input_source_path}")
+            logger.warning(f"No files matching '{glob_pattern}' found in {input_source_path}")
             return None
-        print(f"Found {len(all_files)} files matching pattern.")
+        logger.info(f"Found {len(all_files)} files matching pattern.")
         df_list = []
         for f in all_files:
-            print(f"  Reading {f.name}...")
+            logger.info(f"  Reading {f.name}...")
             try:
                 df = pl.read_csv(f)
                 if required_column not in df.columns:
-                    print(
-                        f"  Warning: '{required_column}' column not found in {f.name}. Skipping file."
+                    logger.warning(
+                        f"  '{required_column}' column not found in {f.name}. Skipping file."
                     )
                     continue
                 df_list.append(df)
             except Exception as e:
-                print(f"  Error reading file {f.name}: {e}. Skipping file.")
+                logger.error(f"  Error reading file {f.name}: {e}. Skipping file.")
                 continue
         if not df_list:
-            print(f"No valid CSV files with '{required_column}' column could be read.")
+            logger.error(f"No valid CSV files with '{required_column}' column could be read.")
             return None
         try:
             full_df = pl.concat(df_list, how="vertical_relaxed")
         except Exception as e:
-            print(f"Error concatenating DataFrames: {e}")
+            logger.error(f"Error concatenating DataFrames: {e}")
             return None
     else:
-        print(
-            f"Error: Input source path is neither a file nor a directory: {input_source_path}"
+        logger.error(
+            f"Input source path is neither a file nor a directory: {input_source_path}"
         )
         return None
     if full_df is None or len(full_df) == 0:
-        print("No data loaded after processing input source.")
+        logger.error("No data loaded after processing input source.")
         return None
-    print(f"Total rows loaded: {len(full_df)}")
+    logger.info(f"Total rows loaded: {len(full_df)}")
     if required_column not in full_df.columns:
-        print(f"Error: '{required_column}' column is missing after processing files.")
+        logger.error(f"'{required_column}' column is missing after processing files.")
         return None
     if len(full_df) < num_samples:
-        print(
-            f"Warning: Not enough data ({len(full_df)} rows) for {num_samples} samples. Using all available data."
+        logger.warning(
+            f"Not enough data ({len(full_df)} rows) for {num_samples} samples. Using all available data."
         )
         sample_df = full_df
     else:
-        print(f"Using seed {seed} for sampling.")
+        logger.info(f"Using seed {seed} for sampling.")
         sample_df = full_df.sample(n=num_samples, shuffle=True, seed=seed)
-    print(f"Selected {len(sample_df)} rows for evaluation.")
+    logger.info(f"Selected {len(sample_df)} rows for evaluation.")
     return sample_df
 
 
@@ -121,7 +124,7 @@ async def run_and_parse_test_models(
     )
 
     # --- Process results to create judge input string from final stage outputs ---
-    print("Processing workflow execution results and preparing judge inputs...")
+    logger.info("Processing workflow execution results and preparing judge inputs...")
     processed_results: List[Dict[str, Any]] = []
 
     # Determine task IDs from the final stage
@@ -228,7 +231,7 @@ async def run_and_parse_test_models(
 def save_results(results_df: pl.DataFrame, output_file: Path):
     """Saves evaluation results DataFrame to a CSV file."""
     # ... (implementation unchanged) ...
-    print(f"Saving evaluation results to {output_file}...")
+    logger.info(f"Saving evaluation results to {output_file}...")
     # Ensure output directory exists before writing
     output_file.parent.mkdir(parents=True, exist_ok=True)
     results_df = results_df.select(sorted(results_df.columns))

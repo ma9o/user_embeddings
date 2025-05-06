@@ -42,7 +42,7 @@ dev = [
 # Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
 # https://docs.astral.sh/ruff/rules/
 # Add explicit rules as needed
-select = ["E4", "E7", "E9", "F", "W", "C901"]
+select = ["E4", "E7", "E9", "F", "W"]
 
 # Same as Black.
 line-length = 88

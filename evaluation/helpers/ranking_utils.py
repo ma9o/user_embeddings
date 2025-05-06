@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 
 # import random # Removed as create_judge_prompt is moved
 from typing import Any, Dict, List, Tuple
@@ -19,6 +20,8 @@ from user_embeddings.utils.llm.workflow_executor import (
     _run_single_prompt,
 )
 
+logger = logging.getLogger(__name__)
+
 # --- Ranking Specific Helpers ---
 
 # // ... existing code ...
@@ -36,7 +39,7 @@ async def run_judge_evaluation(
     """Runs the ranking judge model for each sample where multiple valid outputs exist."""
     judge_tasks = []
     judge_task_metadata = []
-    print("Preparing judge tasks based on final workflow outputs...")
+    logger.info("Preparing judge tasks based on final workflow outputs...")
 
     for i, sample_data in enumerate(sample_workflow_results):
         # Access the pre-serialized judge input strings from the new key
@@ -63,18 +66,18 @@ async def run_judge_evaluation(
                 {"sample_index": i, "mask_map": mask_map, "original_map": original_map}
             )
         else:
-            print(
+            logger.info(
                 f"Skipping judge task for sample {i} due to insufficient valid final outputs ({len(valid_outputs_for_judge)} found)."
             )
 
     judge_responses_raw = []
     if judge_tasks:
-        print(f"Running {len(judge_tasks)} judge tasks concurrently...")
+        logger.info(f"Running {len(judge_tasks)} judge tasks concurrently...")
         judge_responses_raw = await tqdm_asyncio.gather(
             *judge_tasks, desc="Running Judge Models", unit="task"
         )
     else:
-        print("No judge tasks to run.")
+        logger.info("No judge tasks to run.")
 
     judge_response_map: Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]] = {}
     for i, raw_response in enumerate(judge_responses_raw):
@@ -99,7 +102,9 @@ def aggregate_ranking_results(
     debug: bool = False,
 ) -> List[Dict[str, Any]]:
     """Aggregates ranking results, including prompt versions and unmasked rationale."""
-    print("Processing judge results and aggregating final data (including versions)...")
+    logger.info(
+        "Processing judge results and aggregating final data (including versions)..."
+    )
     results_data = []
     all_task_ids_in_workflow = set(
         task["prompt"] for stage in workflow for task in stage.get("tasks", [])
@@ -119,7 +124,7 @@ def aggregate_ranking_results(
                 judge_raw_response
             )
         else:
-            print(
+            logger.info(
                 f"No judge response data found for sample {i}, likely skipped or failed."
             )
 
@@ -136,9 +141,11 @@ def aggregate_ranking_results(
                         if masked in mask_to_original_map
                     ]
                     if len(ranking_original) != len(expected_models_in_judge_input):
-                        print(f"Warning: Judge ranking length mismatch for sample {i}.")
+                        logger.warning(
+                            f"Warning: Judge ranking length mismatch for sample {i}."
+                        )
                 except KeyError as e:
-                    print(f"Error translating ranking for sample {i}: {e}")
+                    logger.error(f"Error translating ranking for sample {i}: {e}")
                     ranking_original = None
             if correct_models_masked is not None:
                 try:
@@ -148,7 +155,9 @@ def aggregate_ranking_results(
                         if masked in mask_to_original_map
                     }
                 except KeyError as e:
-                    print(f"Error translating correct_models list for sample {i}: {e}")
+                    logger.error(
+                        f"Error translating correct_models list for sample {i}: {e}"
+                    )
                     correct_models_original_set = None
             elif judge_data:
                 correct_models_original_set = None
@@ -158,7 +167,7 @@ def aggregate_ranking_results(
         unmasked_rationale = rationale
         if rationale and original_to_mask_map:
             if debug:
-                print(
+                logger.debug(
                     f"DEBUG: original_to_mask_map for sample {i}: {original_to_mask_map}"
                 )
             sorted_map_items = sorted(
@@ -172,11 +181,11 @@ def aggregate_ranking_results(
                 )
         else:
             if debug and not original_to_mask_map and judge_data:
-                print(
+                logger.debug(
                     f"DEBUG: original_to_mask_map is missing for sample {i}, although judge_data exists."
                 )
             if debug and not rationale and judge_data:
-                print(
+                logger.debug(
                     f"DEBUG: Rationale is missing for sample {i}, although judge_data exists."
                 )
 
@@ -293,8 +302,8 @@ def calculate_and_print_leaderboard(
             if num_valid_rank > 0:
                 avg_rank = valid_ranks_df[rank_col].mean()
         else:
-            print(
-                f"Warning: Rank column '{rank_col}' not found. Skipping rank calculation for {model}."
+            logger.warning(
+                f"Rank column '{rank_col}' not found. Skipping rank calculation for {model}."
             )
 
         # Calculate Correctness Stats
@@ -302,17 +311,15 @@ def calculate_and_print_leaderboard(
             # Filter out rows where judge was skipped, failed, or model wasn't in the judge input
             # Select only rows where the correctness value is explicitly True or False
             judged_correctness_df = results_df.filter(
-                (pl.col(correct_col) == True) | (pl.col(correct_col) == False)
+                (pl.col(correct_col)) | (pl.col(correct_col))
             )
             num_judged_correctness = len(judged_correctness_df)
             if num_judged_correctness > 0:
-                true_count = judged_correctness_df.filter(
-                    pl.col(correct_col) == True
-                ).height
+                true_count = judged_correctness_df.filter(pl.col(correct_col)).height
                 correct_percent = (true_count / num_judged_correctness) * 100
         else:
-            print(
-                f"Warning: Correctness column '{correct_col}' not found. Skipping correctness calculation for {model}."
+            logger.warning(
+                f"Correctness column '{correct_col}' not found. Skipping correctness calculation for {model}."
             )
 
         overall_leaderboard.append(
@@ -328,12 +335,12 @@ def calculate_and_print_leaderboard(
     overall_leaderboard.sort(key=lambda x: x[1])  # Sort by average rank
 
     header_line = f"--- Overall Leaderboard ({total_samples} Samples) ---"
-    print(f"\n{header_line}")
-    print("-" * len(header_line))
-    print(
+    logger.info(f"\n{header_line}")
+    logger.info("-" * len(header_line))
+    logger.info(
         f"{'Model':<40} {'Avg Rank':<10} {'Correct (%)':<12} {'# Ranked':<10} {'# Judged Correct'}"
     )
-    print("-" * len(header_line))
+    logger.info("-" * len(header_line))
     for i, (
         model,
         avg_rank,
@@ -345,19 +352,19 @@ def calculate_and_print_leaderboard(
         correct_str = f"{correct_percent:.1f}%" if num_judged_correctness > 0 else "N/A"
         rank_count_str = f"{num_valid_rank}/{total_samples}"
         correct_count_str = f"{num_judged_correctness}/{total_samples}"
-        print(
+        logger.info(
             f"{i + 1}. {model:<37} {rank_str:<10} {correct_str:<12} {rank_count_str:<10} {correct_count_str}"
         )
-    print("-" * len(header_line))
+    logger.info("-" * len(header_line))
 
-    print("\n--- Leaderboards by Dynamic Input Length (Terciles) ---")
+    logger.info("\n--- Leaderboards by Dynamic Input Length (Terciles) ---")
     if (
         "input_length" not in results_df.columns
         or results_df["input_length"].is_null().all()
         or results_df["input_length"].is_not_null().sum() == 0
         or len(results_df.drop_nulls("input_length")) < 3
     ):
-        print(
+        logger.warning(
             "Could not calculate dynamic bins: 'input_length' column missing, empty, or too few non-null values."
         )
         return
@@ -375,7 +382,7 @@ def calculate_and_print_leaderboard(
         if min_len_val is None or max_len_val is None:
             raise ValueError("Min/Max calculation returned None")
     except Exception as e:
-        print(f"Error calculating quantiles for input length bins: {e}")
+        logger.error(f"Error calculating quantiles for input length bins: {e}")
         return
 
     bins = {
@@ -386,7 +393,7 @@ def calculate_and_print_leaderboard(
     }
 
     if q1 == q2:
-        print(f"Note: Input length terciles are equal ({q1}). Adjusting binning.")
+        logger.info(f"Note: Input length terciles are equal ({q1}). Adjusting binning.")
         bins = {}
         if min_len_val < q1:
             bins[f"Short (< {q1})"] = pl.col("input_length") < q1
@@ -400,7 +407,7 @@ def calculate_and_print_leaderboard(
         )
         bin_total_samples = len(bin_df)
         if bin_total_samples == 0:
-            print(f"\n--- {bin_name}: (No samples in this range) ---")
+            logger.info(f"\n--- {bin_name}: (No samples in this range) ---")
             continue
 
         bin_leaderboard = []
@@ -415,17 +422,17 @@ def calculate_and_print_leaderboard(
                 else:
                     bin_leaderboard.append((model, float("inf"), 0))
             else:
-                print(
-                    f"Warning: Rank column '{rank_col}' not found for bin '{bin_name}'. Skipping model {model}."
+                logger.warning(
+                    f"Rank column '{rank_col}' not found for bin '{bin_name}'. Skipping model {model}."
                 )
                 bin_leaderboard.append((model, float("inf"), 0))
         bin_leaderboard.sort(key=lambda x: x[1])
         bin_header_line = f"\n--- {bin_name} ({bin_total_samples} Samples) ---"
-        print(f"{bin_header_line}")
-        print("-" * len(bin_header_line))
+        logger.info(f"{bin_header_line}")
+        logger.info("-" * len(bin_header_line))
         for i, (model, avg_rank, num_valid) in enumerate(bin_leaderboard):
             rank_str = f"{avg_rank:.2f}" if num_valid > 0 else "N/A"
-            print(
+            logger.info(
                 f"{i + 1}. {model:<40} Avg Rank = {rank_str:<6} ({num_valid:>3}/{bin_total_samples} ranked samples)"
             )
-        print("-" * len(bin_header_line))
+        logger.info("-" * len(bin_header_line))

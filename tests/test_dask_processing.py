@@ -1,29 +1,14 @@
+import logging
 import os
-
-# Configure logging -> No longer needed
-# logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-# Ensure the utils directory is in the Python path for import
-# This might be handled by pytest configuration or environment variables in a real setup
 import sys
-
-# No longer need pq here if helper handles writing
-# import pyarrow.parquet as pq # Import pyarrow.parquet
-import time  # Add time import
-from typing import List  # Add List import
+import time
+from typing import List
 
 import dask.dataframe as dd
 import pandas as pd
-
-# import random # No longer needed
-# import dask.bag as db # No longer needed for fixtures
-# import logging # Import logging -> No longer needed
-import pyarrow as pa  # Import pyarrow
+import pyarrow as pa
 import pytest
 from dask.distributed import Client, LocalCluster, progress
-
-workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if workspace_root not in sys.path:  # Ensure root is in path for src import
-    sys.path.insert(0, workspace_root)
 
 from user_embeddings.utils.data_loading.dask_processing import generate_user_context
 
@@ -32,6 +17,13 @@ from user_embeddings.utils.data_loading.dask_processing import generate_user_con
 # from utils.zst_io import DEFAULT_CHUNK_SIZE
 # Import the helper function from its new location
 from .helpers.data_loading import load_or_create_cached_ddf
+
+logger = logging.getLogger(__name__)
+
+workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if workspace_root not in sys.path:  # Ensure root is in path for src import
+    sys.path.insert(0, workspace_root)
+
 
 # --- Constants ---
 # Adjust these paths if your data structure is different
@@ -46,13 +38,20 @@ NUM_TEST_USERS = 10  # Define how many users to sample and test
 # Ensure cache directory exists
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# --- Configure Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 # --- Dask Cluster Setup ---
 # Setup local cluster before fixtures might use it implicitly
-print("Setting up local Dask cluster...")
+logger.info("Setting up local Dask cluster...")
 # Use slightly fewer workers than cores initially, distribute memory
 cluster = LocalCluster(n_workers=5, threads_per_worker=2, memory_limit="20GB")
 client = Client(cluster)
-print(f"Dask dashboard link: {client.dashboard_link}")
+logger.info(f"Dask dashboard link: {client.dashboard_link}")
 
 
 # --- Fixtures (Optional but recommended for setup/teardown) ---
@@ -60,7 +59,7 @@ print(f"Dask dashboard link: {client.dashboard_link}")
 def comments_ddf():
     """Loads the comments Dask DataFrame using a cached Parquet file with full schema."""
     if not os.path.exists(COMMENTS_PATH):
-        print(f"Comments directory not found: {COMMENTS_PATH}")
+        logger.error(f"Comments directory not found: {COMMENTS_PATH}")
         pytest.fail(f"Comments directory not found: {COMMENTS_PATH}")
 
     # Define full meta based on docs/schema.md (Comments)
@@ -106,7 +105,7 @@ def comments_ddf():
 def submissions_ddf():
     """Loads the submissions Dask DataFrame using a cached Parquet file with full schema."""
     if not os.path.exists(SUBMISSIONS_PATH):
-        print(f"Submissions directory not found: {SUBMISSIONS_PATH}")
+        logger.error(f"Submissions directory not found: {SUBMISSIONS_PATH}")
         pytest.fail(f"Submissions directory not found: {SUBMISSIONS_PATH}")
 
     # Define full meta based on docs/schema.md (Submissions)
@@ -159,11 +158,11 @@ def submissions_ddf():
 
 def _sample_test_users(comments_ddf: dd.DataFrame, num_users_to_find: int) -> List[str]:
     """Samples the comments DataFrame to find a list of valid user authors."""
-    print(f"Sampling comments to find {num_users_to_find} valid users...")
+    logger.info(f"Sampling comments to find {num_users_to_find} valid users...")
     sampled_users = []
     # Increase sample size significantly to find multiple users
     sample_size = 1000  # How many comments to check
-    print(f"Attempting to sample from the head (sample size: {sample_size})...")
+    logger.info(f"Attempting to sample from the head (sample size: {sample_size})...")
     try:
         # Sample directly from the Dask DataFrame head
         # Compute is needed here to get actual author names
@@ -185,28 +184,26 @@ def _sample_test_users(comments_ddf: dd.DataFrame, num_users_to_find: int) -> Li
                     if found_users >= num_users_to_find:
                         break  # Stop once we have enough users
 
-            print(
+            logger.info(
                 f"Found {len(sampled_users)} valid users from sample: {sampled_users}"
             )
             if len(sampled_users) < num_users_to_find:
-                print(
-                    f"WARNING: Found only {len(sampled_users)}/{num_users_to_find} distinct valid users in the sample of size {sample_size}."
+                logger.warning(
+                    f"Found only {len(sampled_users)}/{num_users_to_find} distinct valid users in the sample of size {sample_size}."
                 )
 
         if not sampled_users:
-            print(
-                f"ERROR: Could not find any suitable users in the sample (size {sample_size})."
+            logger.error(
+                f"Could not find any suitable users in the sample (size {sample_size})."
             )
             # Let the caller decide whether to skip or fail
 
     except KeyError as e:
-        print(f"ERROR: Failed to find column '{e}' in comments sample.")
+        logger.error(f"Failed to find column '{e}' in comments sample.")
         raise  # Re-raise the error to be caught by the test
     except Exception as e:
-        print(f"ERROR: Failed to sample users from comments: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.error(f"Failed to sample users from comments: {e}")
+        logger.exception("An error occurred while sampling users")
         raise  # Re-raise the error
 
     return sampled_users
@@ -221,7 +218,7 @@ def _run_and_validate_user_test(
     """Runs the context generation for a single user, validates, and saves artifact.
     Returns True if successful, False otherwise.
     """
-    print(
+    logger.info(
         f"\n--- Processing User: {user_id} --- --- --- --- --- --- --- --- --- --- --- --- ---"
     )
     success = True
@@ -232,14 +229,14 @@ def _run_and_validate_user_test(
         )
 
         # --- Compute the results ---
-        print(f"Computing the result Dask DataFrame for user {user_id}...")
+        logger.info(f"Computing the result Dask DataFrame for user {user_id}...")
         start_time = time.time()  # Start timing
         # Persist before compute can sometimes help with complex graphs
         future = context_ddf.persist()
         progress(future)  # Display progress bar
         result_pdf = future.compute()
         end_time = time.time()  # End timing
-        print(
+        logger.info(
             f"Computation finished for user {user_id}. Result shape: {result_pdf.shape}. Time: {end_time - start_time:.2f}s"
         )
 
@@ -255,10 +252,10 @@ def _run_and_validate_user_test(
         ]
         if missing_result_cols:
             err_msg = f"Result DataFrame for user {user_id} missing expected columns: {missing_result_cols}"
-            print(f"ERROR: {err_msg}")
+            logger.error(f"{err_msg}")
             assert False, err_msg  # Fail the specific user test
 
-        print(f"Result DataFrame head for user {user_id}:\n{result_pdf.head()}")
+        logger.info(f"Result DataFrame head for user {user_id}:\n{result_pdf.head()}")
 
         # --- Save test artifact ---
         os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
@@ -267,30 +264,28 @@ def _run_and_validate_user_test(
         output_filename = f"test_output_{safe_username}.csv"
         output_path = os.path.join(output_dir, output_filename)
         try:
-            print(f"Saving test result artifact for {user_id} to: {output_path}")
+            logger.info(f"Saving test result artifact for {user_id} to: {output_path}")
             result_pdf.to_csv(output_path, index=False)
-            print("Artifact saved successfully.")
+            logger.info("Artifact saved successfully.")
         except Exception as e:
-            print(
-                f"WARNING: Failed to save test artifact for {user_id} to {output_path}: {e}"
+            logger.warning(
+                f"Failed to save test artifact for {user_id} to {output_path}: {e}"
             )
             success = False  # Mark test as partially failed if save fails
 
-        print(f"--- Test for user {user_id} completed successfully. ---")
+        logger.info(f"--- Test for user {user_id} completed successfully. ---")
 
     except ValueError as e:
-        print(f"ERROR: generate_user_context raised ValueError for user {user_id}: {e}")
+        logger.error(f"generate_user_context raised ValueError for user {user_id}: {e}")
         success = False
     except AssertionError as e:  # Catch assertion errors explicitly
-        print(f"ERROR: Assertion failed for user {user_id}: {e}")
+        logger.error(f"Assertion failed for user {user_id}: {e}")
         success = False
     except Exception as e:
-        print(
-            f"ERROR: generate_user_context raised an unexpected exception for user {user_id}: {e}"
+        logger.error(
+            f"generate_user_context raised an unexpected exception for user {user_id}: {e}"
         )
-        import traceback
-
-        traceback.print_exc()
+        logger.exception("An error occurred during user context generation")
         success = False
 
     return success
@@ -319,10 +314,10 @@ def test_generate_context_sample_user(
             pytest.fail(f"Failed during user sampling: {e}")
 
     elif isinstance(TEST_USER, list):
-        print(f"Using predefined list of test users: {TEST_USER}")
+        logger.info(f"Using predefined list of test users: {TEST_USER}")
         test_users_to_process = TEST_USER
     elif isinstance(TEST_USER, str):
-        print(f"Using predefined single test user: {TEST_USER}")
+        logger.info(f"Using predefined single test user: {TEST_USER}")
         test_users_to_process = [TEST_USER]
     else:
         pytest.fail(
@@ -343,11 +338,13 @@ def test_generate_context_sample_user(
     actual_comment_cols = comments_ddf.columns
     actual_submission_cols = submissions_ddf.columns
 
-    # Add print statements for debugging column presence after loading
-    print(f"Expected Comment Columns (from Dask DF): {required_comment_cols}")
-    # print(f"Actual Comment Columns: {actual_comment_cols}") # Redundant
-    print(f"Expected Submission Columns (from Dask DF): {required_submission_cols}")
-    # print(f"Actual Submission Columns: {actual_submission_cols}") # Redundant
+    # Add log statements for debugging column presence after loading
+    logger.info(f"Expected Comment Columns (from Dask DF): {required_comment_cols}")
+    # logger.info(f"Actual Comment Columns: {actual_comment_cols}") # Redundant
+    logger.info(
+        f"Expected Submission Columns (from Dask DF): {required_submission_cols}"
+    )
+    # logger.info(f"Actual Submission Columns: {actual_submission_cols}") # Redundant
 
     # Re-check for missing columns (this check is now slightly trivial but good practice)
     missing_comment_cols = [
@@ -383,10 +380,10 @@ def test_generate_context_sample_user(
             # To stop on first failure: break
 
     # --- Dask Cluster Teardown (after all users) ---
-    print("\nShutting down Dask client and cluster...")
+    logger.info("\nShutting down Dask client and cluster...")
     client.close()
     cluster.close()
-    print("Dask client and cluster shut down.")
+    logger.info("Dask client and cluster shut down.")
 
     # Final assertion based on whether all user tests passed
     assert all_tests_passed, "One or more user context generation tests failed."

@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import logging
 import time
 from pathlib import Path
 
@@ -27,6 +28,9 @@ from user_embeddings.utils.llm.workflow_executor import (
     # DEFAULT_INPUT_FORMATTERS no longer needed
     validate_workflow,
 )
+
+logger = logging.getLogger(__name__)
+
 
 # No longer need direct imports for prompts/models used only in config
 # from user_embeddings.utils.teacher_prompts import ...
@@ -88,10 +92,17 @@ async def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     # Use imported WORKFLOWS
     selected_workflow_name = args.workflow
     selected_workflow = WORKFLOWS[selected_workflow_name]
-    print(f"Using workflow: '{selected_workflow_name}'")
+    logger.info(f"Using workflow: '{selected_workflow_name}'")
 
     # --- Validate Workflow using the imported function ---
     # Use imported AVAILABLE_PROMPTS
@@ -111,7 +122,7 @@ async def main():
         # available_input_formatters=AVAILABLE_INPUT_FORMATTERS, # Validation doesn't use formatters yet
     )
     if not is_valid:
-        print("Workflow validation failed. Exiting.")
+        logger.error("Workflow validation failed. Exiting.")
         return
 
     # --- Determine Judge Prompt ---
@@ -125,21 +136,23 @@ async def main():
         final_stage_tasks = last_stage.get("tasks", [])
         if len(final_stage_tasks) == 1:
             judge_prompt_module_name = final_stage_tasks[0]["prompt"]
-            print(
+            logger.info(
                 f"Judge prompt not specified, defaulting to: '{judge_prompt_module_name}'"
             )
         else:
-            print(
+            logger.error(
                 "Error: --judge-prompt-module is required when the workflow's final stage does not have exactly one task."
             )
             return
     # Use imported AVAILABLE_PROMPTS
     if judge_prompt_module_name not in AVAILABLE_PROMPTS:
-        print(f"Error: Judge prompt module '{judge_prompt_module_name}' not found.")
+        logger.error(
+            f"Error: Judge prompt module '{judge_prompt_module_name}' not found."
+        )
         return
     # Extract only the prompt text for the judge
     judge_instruction_prompt_text = AVAILABLE_PROMPTS[judge_prompt_module_name][0]
-    print(
+    logger.info(
         f"Using judge prompt module: '{judge_prompt_module_name}' (Version: {AVAILABLE_PROMPTS[judge_prompt_module_name][1]})"
     )
 
@@ -148,22 +161,24 @@ async def main():
     # 1. Load and Sample Data
     # Use imported DEFAULT_SEED logic from common_args via args.seed
     effective_seed = args.seed if args.seed is not None else int(time.time())
-    print(f"Using seed: {effective_seed}")
+    logger.info(f"Using seed: {effective_seed}")
 
     # Determine input source and construct output filename (Input source logic remains same)
     # Uses args.input_data_file, args.input_data_dir from common_args
     if args.input_data_file:
         input_source_path = args.input_data_file
         if not input_source_path.is_file():
-            print(f"Error: Specified input data file not found: {input_source_path}")
+            logger.error(
+                f"Error: Specified input data file not found: {input_source_path}"
+            )
             await c.aclose()
             return
         input_data_stem = input_source_path.stem
-        print(f"Using specific input file: {input_source_path}")
+        logger.info(f"Using specific input file: {input_source_path}")
     else:
         input_source_path = args.input_data_dir
         if not input_source_path.is_dir():
-            print(
+            logger.error(
                 f"Error: Specified input data directory not found: {input_source_path}"
             )
             await c.aclose()
@@ -171,7 +186,7 @@ async def main():
         input_data_stem = (
             f"combined_{input_source_path.name}"  # Use dir name for combined output
         )
-        print(f"Sampling from CSV files in directory: {input_source_path}")
+        logger.info(f"Sampling from CSV files in directory: {input_source_path}")
 
     # Construct output filename using the utility
     try:
@@ -186,9 +201,9 @@ async def main():
             seed=effective_seed,
             append=False,
         )
-        print(f"Output will be saved to: {output_file_path}")
+        logger.info(f"Output will be saved to: {output_file_path}")
     except ValueError as e:
-        print(f"Error generating filename: {e}")
+        logger.error(f"Error generating filename: {e}")
         await c.aclose()
         return
 
@@ -241,7 +256,7 @@ async def main():
     # 6. Calculate and Print Leaderboard
     calculate_and_print_leaderboard(results_df, args.models)
 
-    print(f"Evaluation complete. Results saved to {output_file_path}")
+    logger.info(f"Evaluation complete. Results saved to {output_file_path}")
 
     await c.aclose()
 

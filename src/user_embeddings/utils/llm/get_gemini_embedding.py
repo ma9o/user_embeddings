@@ -2,7 +2,10 @@ from google import genai
 from google.genai.types import EmbedContentConfig
 from google.oauth2 import service_account
 from json_repair import repair_json
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 GEMINI_EMBEDDING_MODEL_ID = "text-embedding-large-exp-03-07"
 EMBEDDING_DIMENSION = 3072
@@ -36,8 +39,8 @@ def get_gemini_embedding(embedding_client: genai.Client, text: str) -> list[floa
         embedding_values = response.embeddings[0].values
 
         if len(embedding_values) != EMBEDDING_DIMENSION:
-            print(
-                f"Warning: Embedding dimension mismatch. Expected {EMBEDDING_DIMENSION}, got {len(embedding_values)}"
+            logger.warning(
+                f"Embedding dimension mismatch. Expected {EMBEDDING_DIMENSION}, got {len(embedding_values)}"
             )
             raise ValueError(
                 f"Embedding dimension mismatch. Expected {EMBEDDING_DIMENSION}, got {len(embedding_values)}"
@@ -45,5 +48,5 @@ def get_gemini_embedding(embedding_client: genai.Client, text: str) -> list[floa
 
         return embedding_values
     else:
-        print("Warning: No embedding values returned")
+        logger.warning("No embedding values returned")
         raise ValueError("No embedding values returned")

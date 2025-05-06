@@ -1,8 +1,11 @@
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 
 # Import utility shared or needed by these funcs
 from user_embeddings.utils.parsing import parse_llm_json_output
+
+logger = logging.getLogger(__name__)
 
 # Read the base judge prompt
 _JUDGE_BASE_PROMPT_TEXT = ""
@@ -15,7 +18,7 @@ try:
     with open(_JUDGE_BASE_TXT_PATH, "r", encoding="utf-8") as f:
         _JUDGE_BASE_PROMPT_TEXT = f.read().strip()
 except Exception as e:
-    print(
+    logger.error(
         f"Error reading base judge prompt file at {_JUDGE_BASE_TXT_PATH}: {e}. Proceeding without it."
     )
     raise e
@@ -84,19 +87,19 @@ def parse_judge_output(judge_response: str) -> Optional[Dict[str, str]]:
     parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
 
     if parsed_json is None:
-        print(f"Error parsing constraint judge output. Raw output:\n{judge_response}")
+        logger.error(f"Error parsing constraint judge output. Raw output:\n{judge_response}")
         return None
 
     if not isinstance(parsed_json, dict):
-        print(f"Warning: Constraint judge output is not a dictionary: {parsed_json}")
+        logger.warning(f"Constraint judge output is not a dictionary: {parsed_json}")
         return None
 
     violations_dict: Dict[str, str] = {}
     valid = True
     for key, value in parsed_json.items():
         if not isinstance(key, str) or not isinstance(value, str):
-            print(
-                f"Warning: Constraint judge dictionary contains non-string key or value: ({type(key)}) {{key}}: ({type(value)}) {{value}}"
+            logger.warning(
+                f"Constraint judge dictionary contains non-string key or value: ({type(key)}) {{key}}: ({type(value)}) {{value}}"
             )
             valid = False
             break

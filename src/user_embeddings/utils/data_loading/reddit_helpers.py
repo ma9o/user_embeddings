@@ -1,7 +1,10 @@
 from datetime import datetime
+import logging
 from typing import Any, Dict, List, Set, Tuple
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # --- Ancestor Finding ---
 
@@ -96,8 +99,8 @@ def _get_all_ancestors_optimized(
             # else: Parent comment not in this submission's group - stop traversal up this path
 
     if iterations >= max_iterations:
-        print(
-            f"Warning: Ancestor search reached max iterations ({max_iterations}). Might be incomplete."
+        logger.warning(
+            f"Ancestor search reached max iterations ({max_iterations}). Might be incomplete."
         )
 
     return all_ancestors
@@ -141,8 +144,8 @@ def _initialize_thread_build(
     # Sort relevant IDs chronologically
     # Ensure 'created_utc' exists before sorting
     if "created_utc" not in comment_map.columns:
-        print(
-            "Warning: 'created_utc' column missing in comment map for thread building. Using arbitrary order."
+        logger.warning(
+            "'created_utc' column missing in comment map for thread building. Using arbitrary order."
         )
         sorted_relevant_ids = list(
             valid_relevant_ids

@@ -1,8 +1,10 @@
+import logging
 import time  # Added for timestamp seeding
-import traceback
 from pathlib import Path
 
 import polars as pl
+
+logger = logging.getLogger(__name__)
 
 # --- Refiner Specific Helpers ---
 
@@ -29,10 +31,10 @@ def determine_effective_seed(provided_seed: int | None, output_file_path: Path) 
                       to determine the seed from the previous run.
     """
     if provided_seed is not None:
-        print(f"Using provided seed: {provided_seed}")
+        logger.info(f"Using provided seed: {provided_seed}")
         return provided_seed
 
-    print("Seed not provided, attempting to determine from previous run...")
+    logger.info("Seed not provided, attempting to determine from previous run...")
     if output_file_path.exists():
         try:
             lazy_df = pl.scan_csv(
@@ -54,12 +56,12 @@ def determine_effective_seed(provided_seed: int | None, output_file_path: Path) 
 
                 if last_violation_count == 0:
                     effective_seed = int(time.time())
-                    print(
+                    logger.info(
                         f"Last run (seed {last_seed}) had 0 violations. Generating new seed: {effective_seed}"
                     )
                     return effective_seed
                 else:
-                    print(
+                    logger.info(
                         f"Last run (seed {last_seed}) had {last_violation_count} violation(s). Reusing seed: {last_seed}"
                     )
                     return last_seed  # Return the reused seed
@@ -94,7 +96,7 @@ def determine_effective_seed(provided_seed: int | None, output_file_path: Path) 
     else:
         # Output file does not exist - generate initial seed
         effective_seed = int(time.time())
-        print(
+        logger.info(
             f"Output file '{output_file_path}' not found. Generating initial seed: {effective_seed}"
         )
         return effective_seed
@@ -105,7 +107,7 @@ def save_single_row_results_appending(single_row_df: pl.DataFrame, output_file: 
     file_exists = output_file.exists()
     # Ensure output directory exists
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Appending result row to {output_file}...")
+    logger.info(f"Appending result row to {output_file}...")
     try:
         # Open file in append mode and pass file object to write_csv
         with open(output_file, "a") as f:
@@ -113,8 +115,8 @@ def save_single_row_results_appending(single_row_df: pl.DataFrame, output_file: 
                 f,  # Pass the file object
                 include_header=not file_exists,  # Only write header if file was newly created
             )
-        print("Append successful.")
+        logger.info("Append successful.")
 
     except Exception as e:
-        print(f"Error appending to CSV file {output_file}: {e}")
-        traceback.print_exc()
+        logger.error(f"Error appending to CSV file {output_file}: {e}")
+        logger.exception("Exception details:")  # This includes the traceback
