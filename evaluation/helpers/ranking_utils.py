@@ -1,104 +1,37 @@
 import asyncio
 import json
-import random
-from typing import Any, Dict, List, Optional, Tuple
+
+# import random # Removed as create_judge_prompt is moved
+from typing import Any, Dict, List, Tuple
 
 import polars as pl
-from pydantic import BaseModel
+from pydantic import BaseModel  # Keep if other functions use it, otherwise remove
 from tqdm.asyncio import tqdm_asyncio
 
+# Removed: from user_embeddings.utils.parsing import parse_llm_json_output
+# Import new judge prompt functions
+from src.user_embeddings.utils.judge_prompts.rank_benchmark_judge import (
+    create_judge_prompt,
+    parse_judge_output,
+)
 from user_embeddings.utils.llm.workflow_executor import (
     WorkflowStage,
     _run_single_prompt,
 )
 
-# Import utility shared or needed by these funcs
-from user_embeddings.utils.parsing import parse_llm_json_output
-
 # --- Ranking Specific Helpers ---
 
+# // ... existing code ...
+# create_judge_prompt function was here, now removed
 
-def create_judge_prompt(
-    instruction_prompt: str, input_data: str, outputs: Dict[str, str]
-) -> Tuple[str, Dict[str, str], Dict[str, str]]:
-    """Creates a blinded prompt for the ranking judge model."""
-    original_items = list(outputs.items())
-    random.shuffle(original_items)
-    masked_outputs = {}
-    mask_to_original_map = {}
-    original_to_mask_map = {}
-    masked_model_names = []
-    for i, (original_name, output) in enumerate(original_items):
-        masked_name = f"MODEL_{chr(ord('A') + i)}"
-        masked_outputs[masked_name] = output
-        mask_to_original_map[masked_name] = original_name
-        original_to_mask_map[original_name] = masked_name
-        masked_model_names.append(masked_name)
-    prompt = "You are an expert evaluator tasked with ranking the quality of different Large Language Model (LLM) outputs based on a given instruction and input.\n\n"
-    prompt += f"INSTRUCTION PROMPT GIVEN TO MODELS:\n---\n{instruction_prompt}\n---\n\n"
-    prompt += f"INPUT DATA GIVEN TO MODELS:\n---\n{input_data}\n---\n\n"
-    prompt += 'LLM OUTPUTS TO EVALUATE (Models have been anonymized):\n---"'
-    for masked_name, output in masked_outputs.items():
-        prompt += f"\nOutput ({masked_name}):\n{output}\n---"
-    prompt += "\n\nTASK:\n1. Evaluate the outputs based *only* on how well they follow the INSTRUCTION PROMPT for the given INPUT DATA. Consider clarity, structure, adherence to format, and accuracy of the generated summary/actions based *solely* on the provided input context.\n"
-    prompt += "2. Identify *all* anonymized model outputs that correctly and completely fulfilled the INSTRUCTION PROMPT.\n\n"
-    prompt += "RANKING AND CORRECTNESS FORMAT:\nProvide your evaluation as a JSON object containing three keys: 'ranking' (a list of anonymized model names, ordered from best to worst), 'rationale' (a brief explanation for your ranking decisions), and 'correct_models' (a list containing the anonymized names of *only* the models whose output was correct and complete. If no models were correct, provide an empty list `[]`). Use the anonymized model names provided (e.g., MODEL_A, MODEL_B). For example:\n"
-    prompt += (
-        "```json\n"
-        "{\n"
-        '  "ranking": ["MODEL_A", "MODEL_C", "MODEL_B"],\n'
-        '  "rationale": "MODEL_A was best because..., MODEL_C was okay..., MODEL_B failed...",\n'
-        '  "correct_models": ["MODEL_A", "MODEL_C"]\n'
-        "}\n"
-        "```\n"
-        "\nIMPORTANT: In your 'rationale', make sure to refer to the models using their anonymized names (e.g., MODEL_A, MODEL_B).\n"
-    )
-    prompt += f"The available anonymized model names are: {masked_model_names}. Use these exact names (e.g., MODEL_A, MODEL_B) in the 'ranking' list and, if applicable, in the 'correct_models' list. Return ONLY the JSON object and nothing else."
-    return prompt, mask_to_original_map, original_to_mask_map
-
-
-def parse_judge_output(
-    judge_response: str,
-) -> Tuple[Optional[List[str]], Optional[str], Optional[List[str]]]:
-    """Parses the ranking judge's JSON response, expecting ranking, rationale, and a list of correct models."""
-    parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
-
-    if parsed_json is None:
-        print(f"Error parsing judge output. Raw output:\n{judge_response}")
-        return None, None, None
-
-    # Extract fields with type checking
-    ranking = parsed_json.get("ranking")
-    rationale = parsed_json.get("rationale")
-    correct_models = parsed_json.get("correct_models")
-
-    # Validate types
-    if not isinstance(ranking, list) or not all(
-        isinstance(item, str) for item in ranking
-    ):
-        print(
-            f"Warning: Judge output 'ranking' key is not a list of strings: {ranking}"
-        )
-        ranking = None
-    if not isinstance(rationale, str):
-        print(f"Warning: Judge output 'rationale' key is not a string: {rationale}")
-        rationale = None
-    # Validate correct_models list
-    if not isinstance(correct_models, list) or not all(
-        isinstance(item, str) for item in correct_models
-    ):
-        print(
-            f"Warning: Judge output 'correct_models' key is not a list of strings: {correct_models}"
-        )
-        correct_models = None
-
-    return ranking, rationale, correct_models
+# // ... existing code ...
+# parse_judge_output function was here, now removed
 
 
 async def run_judge_evaluation(
     sample_workflow_results: List[Dict[str, Any]],
     judge_model: str,
-    judge_instruction_prompt_text: str,
+    judge_directive_text: str,
 ) -> Dict[int, Tuple[str, Dict[str, str], Dict[str, str]]]:
     """Runs the ranking judge model for each sample where multiple valid outputs exist."""
     judge_tasks = []
@@ -116,10 +49,11 @@ async def run_judge_evaluation(
         }
 
         if len(valid_outputs_for_judge) > 1:
+            # Use the imported create_judge_prompt
             judge_prompt, mask_map, original_map = create_judge_prompt(
-                judge_instruction_prompt_text,
-                sample_data["input_data"],
-                valid_outputs_for_judge,
+                instruction_prompt=judge_directive_text,
+                input_data=sample_data["input_data"],
+                outputs=valid_outputs_for_judge,
             )
             task = asyncio.create_task(
                 _run_single_prompt(judge_model, judge_prompt)
@@ -180,6 +114,7 @@ def aggregate_ranking_results(
         judge_raw_response = None
         if judge_data:
             judge_raw_response, mask_to_original_map, original_to_mask_map = judge_data
+            # Use the imported parse_judge_output
             ranking_masked, rationale, correct_models_masked = parse_judge_output(
                 judge_raw_response
             )
