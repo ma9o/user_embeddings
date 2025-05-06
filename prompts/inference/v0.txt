@@ -39,7 +39,7 @@ Input:
 }
 
 Correct JSON Output:
-```json
+<result>
 {
   "statements": [
     "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading, particularly questioning the value of low costs if underlying risk is high.",
@@ -48,7 +48,7 @@ Correct JSON Output:
     "INTENT: Wants to help an advice-seeker clarify their investment strategy by prompting for core objectives [like time horizon], perceiving a potential mismatch between stated means [like focusing on low costs] and unstated goals."
   ]
 }
-```
+</result>
 
 ---
 

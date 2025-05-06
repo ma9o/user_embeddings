@@ -79,7 +79,7 @@ Input Raw Conversation JSON:
 ```
 
 Correct JSON Output (KOA ONLY):
-```json
+<result>
 {
   "koa": [
     "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs [when evaluating the significance of low-cost platforms in investing/trading].",
@@ -87,7 +87,7 @@ Correct JSON Output (KOA ONLY):
     "KNOWLEDGE: Recognizes that investment advice must align with specific goals, distinguishing between approaches for long-term holding versus short-term profit seeking [in investing]."
   ]
 }
-```
+</result>
 
 Example 2 (Illustrating ATTRIBUTE constraint 2.2):
 
@@ -111,14 +111,14 @@ Input Raw Conversation JSON:
 ```
 
 Correct JSON Output (KOA ONLY):
-```json
+<result>
 {
   "koa": [
     "ATTRIBUTE: Has experienced similar frustrations [with Python pipenv dependency resolution].",
     "KNOWLEDGE: Knows potential troubleshooting steps for pipenv dependency issues, such as clearing cache or regenerating the lockfile [in Python environment management]."
   ]
 }
-```
+</result>
 (Incorrect ATTRIBUTE Example for 2.2: "ATTRIBUTE: Expresses frustration [with Python pipenv dependency resolution]." - Describes the communicative action, not the attribute.)
 
 Example 3 (Illustrating Constraints 3.7 - Grounded Inference & 2.3 - No Quotes):
@@ -143,14 +143,14 @@ Input Raw Conversation JSON:
 ```
 
 Correct JSON Output (KOA ONLY):
-```json
+<result>
 {
   "koa": [
     "OPINION: Believes player Jamison sometimes behaves poorly [in the context of a specific football tackle event].",
     "KNOWLEDGE: Is aware of a specific recent football event involving players Jamison and Robinson [in football]." 
   ]
 }
-```
+</result>
 (Incorrect Inference Example for 3.7: "ATTRIBUTE: Is a supporter of player Robinson [in football]." - This is UNSUPPORTED speculation. Criticizing Jamison does NOT automatically mean SUBJECT supports Robinson. Stick ONLY to what is directly stated or implied by SUBJECT's words.)
 (Incorrect Quote Example for 2.3: "OPINION: Believes Jamison behaves poorly ('is a grub') [...]." - This includes a quote. Rephrase the meaning fully.)
 

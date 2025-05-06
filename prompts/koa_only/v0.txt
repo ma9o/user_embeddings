@@ -30,7 +30,7 @@ KOAI Definitions (Focus on K, O, A):
 Example (Input JSON is the same as before):
 
 Correct JSON Output for KOA:
-```json
+<result>
 {
   "koa": [
     "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading, particularly questioning the value of low costs if underlying risk is high.",
@@ -39,7 +39,7 @@ Correct JSON Output for KOA:
     // NOTE: No INTENT statement included here
   ]
 }
-```
+</result>
 
 ---
 

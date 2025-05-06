@@ -77,7 +77,7 @@ Input Raw Conversation JSON:
 ```
 
 Correct JSON Output (Flat lists under "koa" and "intents", atomic, format-agnostic, semantically rich, generalized, NO QUOTES, appropriate context embedded, differentiates KOA vs Intent):
-```json
+<result>
 {
   "koa": [
     "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading [when evaluating the significance of low-cost platforms].",
@@ -88,7 +88,7 @@ Correct JSON Output (Flat lists under "koa" and "intents", atomic, format-agnost
     "INTENT: Aims to redirect an advice-seeker's focus from secondary factors (like trade costs) towards primary investment objectives (like time horizon) [when perceiving a potential mismatch or lack of clarity in the seeker's strategy]."
   ]
 }
-```
+</result>
 
 ---
 

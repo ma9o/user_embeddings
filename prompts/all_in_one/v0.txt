@@ -68,7 +68,7 @@ Input Raw Conversation JSON:
 ```
 
 Correct JSON Output (Flat list, atomic, format-agnostic, semantically rich, generalized, NO QUOTES, informational context where appropriate, retains necessary interaction context for INTENT):
-```json
+<result>
 {
   "koa": [
     "OPINION: Prioritizes avoiding capital loss over minimizing transaction costs in investing/trading, particularly questioning the value of low costs if underlying risk is high.",
@@ -79,7 +79,7 @@ Correct JSON Output (Flat list, atomic, format-agnostic, semantically rich, gene
     "INTENT: Wants to help a beginner investor clarify their investment strategy by prompting for core objectives like time horizon, perceiving a potential mismatch between stated means (like focusing on low costs) and unstated goals."
   ]
 }
-```
+</result>
 
 ---
 

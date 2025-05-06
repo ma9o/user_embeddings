@@ -66,13 +66,13 @@ Example 1:
 ]
 
 Correct JSON Output (after providing your rationale):
-```json
+<result>
 {
   "intents":[
     "INTENT: Wants to help a beginner investor to redirect their focus from secondary factors (like transaction fees) towards primary investment objectives (like strategy)."
   ]
 }
-```
+</result>
 
 ---
 
@@ -94,14 +94,14 @@ Example 2:
 ]
 
 Correct JSON Output (after providing your rationale):
-```json
+<result>
 {
   "intents": [
     "INTENT: Wants to mock the type of nonsensical, overly enthusiastic, "random," and meme-obsessed comments often found online."
     # NB: You need to infer that they were being ironic here!
   ]
 }
-```
+</result>
 
 Wrong JSON Output:
 ```json
@@ -133,13 +133,13 @@ Example 3:
 ]
 
 Correct JSON Output (after providing your rationale):
-```json
+<result>
 {
   "intents": [
     "INTENT: Recommending a list of stock brockers to someone that is very new to sotcks trading."
   ]
 }
-```
+</result>
 
 Wrong JSON Output:
 ```json

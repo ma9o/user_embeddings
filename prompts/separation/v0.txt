@@ -88,7 +88,7 @@ Input:
 ```
 
 Correct JSON Output:
-```json
+<result>
 {
   "context": "A participant ('fqn') initiated a discussion seeking advice on timing stock purchases after a recent market dip, questioning if it's a buying opportunity or a 'dead cat bounce'. This participant subsequently expressed concern it might be a bounce and considered holding cash, but then weighed the possibility of short-term trading enabled by free commissions on their platform.",
   "actions": [
@@ -96,7 +96,7 @@ Correct JSON Output:
     "SUBJECT prompts the initiating participant ('fqn') to define their investment objective, specifically asking whether the goal is long-term holding or seeking short-term profits."
   ]
 }
-```
+</result>
 
 ---
 

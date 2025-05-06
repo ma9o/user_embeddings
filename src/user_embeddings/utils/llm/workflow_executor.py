@@ -1,12 +1,13 @@
 import asyncio
+import json
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 
 import polars as pl
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 from tqdm.asyncio import tqdm_asyncio
 
-from user_embeddings.utils.parsing import parse_llm_json_output
+from user_embeddings.utils.parsing import parse_llm_tagged_output
 
 # Assuming get_text_completion is available via relative import or PYTHONPATH
 # Adjust the import path based on your project structure if necessary
@@ -158,7 +159,9 @@ async def _run_single_prompt(model_name: str, prompt: str) -> str:
     """Helper to run a single model prompt and handle errors."""
     try:
         # This assumes get_text_completion is initialized elsewhere or handles it
-        result = await get_text_completion(model_name, prompt)
+        # Add instruction for XML-like result tags
+        prompt_with_instructions = f"{prompt}\n\nIMPORTANT: Ensure your final answer is enclosed in <result> and </result> tags."
+        result = await get_text_completion(model_name, prompt_with_instructions)
         return result
     except Exception as e:
         logger.error(f"Error running model {model_name} for prompt: {e}")
@@ -305,6 +308,11 @@ async def execute_workflow(
                                     current_task_input_str = (
                                         single_input_value.model_dump_json(indent=None)
                                     )
+                                elif isinstance(single_input_value, dict):
+                                    # If it's a dict (e.g., from a non-Pydantic task), serialize to JSON
+                                    current_task_input_str = json.dumps(
+                                        single_input_value, indent=None
+                                    )
                                 else:
                                     # Use the string representation for other types
                                     current_task_input_str = str(single_input_value)
@@ -366,33 +374,34 @@ async def execute_workflow(
 
             # Attempt parsing/validation only if a Pydantic model is defined
             output_model = available_output_models.get(task_id)
-            if output_model:
-                parsed_dict = parse_llm_json_output(raw_result_str, expect_type=dict)
-                if parsed_dict is None:
-                    intermediate_results[task_id] = "ERROR: Parse Failed"
-                    logger.warning(
-                        f"Failed to parse JSON output for task '{task_id}', model '{model_name}'. Raw output stored."
-                    )
-                else:
-                    try:
-                        validated_data: BaseModel = output_model.model_validate(
-                            parsed_dict
-                        )
-                        intermediate_results[task_id] = (
-                            validated_data  # Store the validated Pydantic object
-                        )
-                        # print(f"Task '{task_id}' output validated successfully.") # Debug log
-                    except ValidationError as ve:
-                        intermediate_results[task_id] = (
-                            f"ERROR: Validation Failed - {ve}"
-                        )
-                        logger.warning(
-                            f"Pydantic validation failed for task '{task_id}', model '{model_name}': {ve}. Raw output stored."
-                        )
+            # Call the new parsing function, passing task_id and the model (or None)
+            parsed_and_validated_result = parse_llm_tagged_output(
+                raw_result_str,
+                task_id=task_id,
+                expect_model=output_model,  # Pass the Pydantic model or None
+                return_on_error=None,  # Decide error handling, None means it will log and return None
+            )
+
+            if parsed_and_validated_result is None:
+                # Error already logged by parse_llm_tagged_output if verbose
+                intermediate_results[task_id] = (
+                    f"ERROR: Parsing or Validation Failed for task '{task_id}'"
+                )
+                logger.warning(
+                    f"Failed to parse or validate output for task '{task_id}', model '{model_name}'. Raw output stored."
+                )
+            elif isinstance(
+                parsed_and_validated_result, str
+            ) and parsed_and_validated_result.startswith("ERROR:"):
+                # This case should ideally be handled if parse_llm_tagged_output returns specific error strings
+                intermediate_results[task_id] = parsed_and_validated_result
             else:
-                # No model defined, store the raw string output as the result
-                intermediate_results[task_id] = raw_result_str
-                # print(f"Task '{task_id}' has no Pydantic model defined, storing raw output.") # Debug log
+                intermediate_results[task_id] = parsed_and_validated_result
+                # Debug log for successful processing
+                # if output_model:
+                #     logger.debug(f"Task '{task_id}' output validated successfully against {type(output_model).__name__}.")
+                # else:
+                #     logger.debug(f"Task '{task_id}' (no Pydantic model) processed. Result: {parsed_and_validated_result}")
 
     # Return all results (validated models, raw strings, or errors)
     # Add raw outputs for debugging or potential fallback needs downstream

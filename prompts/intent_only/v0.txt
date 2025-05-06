@@ -25,14 +25,14 @@ Intent Definition:
 Example (Input JSON is the same as before):
 
 Correct JSON Output for Intent:
-```json
+<result>
 {
   "intents": [
     // NOTE: Only the INTENT statement is included here
     "INTENT: Wants to help an advice-seeker clarify their investment strategy by prompting for core objectives [like time horizon], perceiving a potential mismatch between stated means [like focusing on low costs] and unstated goals."
  ]
 }
-```
+</result>
 
 ---
 
