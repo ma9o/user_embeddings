@@ -223,8 +223,6 @@ async def main():
         sample_df,
         [args.model_to_evaluate],  # Single model
         selected_workflow,
-        AVAILABLE_PROMPTS,
-        AVAILABLE_OUTPUT_MODELS,
     )
 
     # --- Run Constraint Judge ---

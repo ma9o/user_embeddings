@@ -20,23 +20,6 @@ from user_embeddings.utils.teacher_prompts import (
     koa_only as koa_only_module,
 )
 
-# Import Pydantic models for AVAILABLE_OUTPUT_MODELS
-# Moved these imports up
-# from user_embeddings.utils.teacher_prompts import intent_only as intent_only_module
-# from user_embeddings.utils.teacher_prompts import koa_only as koa_only_module
-# from user_embeddings.utils.teacher_prompts.deprecated import inference, separation
-
-# Import potential separation model if defined (assuming it exists)
-try:
-    from user_embeddings.utils.teacher_prompts.deprecated import (
-        separation as separation_module,
-    )
-except ImportError:
-    separation_module = None  # Handle case where it might not exist
-    print(
-        "Warning: separation_module not found, workflows using 'separation' might fail validation."
-    )
-
 # --- Shared Prompt Mapping --- (Now includes version)
 # Used by both llm_rank_benchmark and prompt_adherence
 # Stores tuple: (prompt_text, prompt_version)
@@ -59,9 +42,16 @@ AVAILABLE_OUTPUT_MODELS: Dict[str, type[BaseModel]] = {
     "all_in_one": all_in_one_module.PromptOutput,
 }
 
-# Add separation model if it exists and has PromptOutput
-if separation_module and hasattr(separation_module, "PromptOutput"):
-    AVAILABLE_OUTPUT_MODELS["separation"] = separation_module.PromptOutput
+# --- Shared Input Formatter Mapping ---
+# Used by workflow_executor to format inputs for specific tasks
+# Maps task_id (prompt name) -> Callable[[Dict[str, Any]], str]
+# Define your formatter functions (e.g., in the prompt modules) and import them here.
+AVAILABLE_INPUT_FORMATTERS: Dict[str, callable] = {
+    # Example:
+    # "inference": inference_module.format_inference_input,
+    "intent_only": intent_only_module.format_intent_only_input,
+}
+
 
 # --- Shared Workflow Definitions ---
 # Used by both llm_rank_benchmark and prompt_adherence
@@ -69,7 +59,7 @@ WORKFLOWS: Dict[str, List[WorkflowStage]] = {
     "serial_separation_inference": [
         {
             "stage": 1,
-            "tasks": [{"prompt": "separation", "input_from": "__RAW_INPUT__"}],
+            "tasks": [{"prompt": "separation", "input_from": ["__RAW_INPUT__"]}],
         },
         {"stage": 2, "tasks": [{"prompt": "inference", "input_from": ["separation"]}]},
     ],
@@ -77,26 +67,43 @@ WORKFLOWS: Dict[str, List[WorkflowStage]] = {
         {
             "stage": 1,
             "tasks": [
-                {"prompt": "intent_only", "input_from": "__RAW_INPUT__"},
-                {"prompt": "koa_only", "input_from": "__RAW_INPUT__"},
+                {"prompt": "intent_only", "input_from": ["__RAW_INPUT__"]},
+                {"prompt": "koa_only", "input_from": ["__RAW_INPUT__"]},
             ],
         },
     ],
     "single_all_in_one": [
-        {"stage": 1, "tasks": [{"prompt": "all_in_one", "input_from": "__RAW_INPUT__"}]}
+        {
+            "stage": 1,
+            "tasks": [{"prompt": "all_in_one", "input_from": ["__RAW_INPUT__"]}],
+        }
     ],
     "single_intent_only": [
         {
             "stage": 1,
-            "tasks": [{"prompt": "intent_only", "input_from": "__RAW_INPUT__"}],
+            "tasks": [{"prompt": "intent_only", "input_from": ["__RAW_INPUT__"]}],
         }
     ],
     "inference_only": [
-        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": "__RAW_INPUT__"}]}
+        {
+            "stage": 1,
+            "tasks": [{"prompt": "inference", "input_from": ["__RAW_INPUT__"]}],
+        }
+    ],
+    "koa_only": [
+        {"stage": 1, "tasks": [{"prompt": "koa_only", "input_from": ["__RAW_INPUT__"]}]}
     ],
     "inference_with_intent": [
-        {"stage": 1, "tasks": [{"prompt": "inference", "input_from": "__RAW_INPUT__"}]},
-        {"stage": 2, "tasks": [{"prompt": "intent_only", "input_from": ["inference"]}]},
+        {
+            "stage": 1,
+            "tasks": [{"prompt": "inference", "input_from": ["__RAW_INPUT__"]}],
+        },
+        {
+            "stage": 2,
+            "tasks": [
+                {"prompt": "intent_only", "input_from": ["inference", "__RAW_INPUT__"]}
+            ],
+        },
     ],
 }
 

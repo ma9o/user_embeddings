@@ -8,11 +8,7 @@ import polars as pl
 from dotenv import load_dotenv
 
 # Import shared configurations
-from evaluation.config import (
-    AVAILABLE_OUTPUT_MODELS,
-    AVAILABLE_PROMPTS,
-    WORKFLOWS,  # For help text
-)
+from evaluation.config import WORKFLOWS  # Keep only WORKFLOWS
 from evaluation.helpers.common_args import (  # Import new helper
     add_common_eval_args,
 )
@@ -93,6 +89,9 @@ async def main():
     )
 
     # --- Validate Workflow --- (Reused)
+    # Re-import configs needed for validation
+    from evaluation.config import AVAILABLE_OUTPUT_MODELS, AVAILABLE_PROMPTS
+
     # Use imported AVAILABLE_PROMPTS
     # Also pass available_output_models for validation
     is_valid = validate_workflow(

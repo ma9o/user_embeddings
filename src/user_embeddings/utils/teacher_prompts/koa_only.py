@@ -9,7 +9,6 @@ class PromptOutput(BaseModel):
     """Pydantic model for validating the output of the KOA extraction prompt."""
 
     koa: List[str] = Field(
-        ...,
         description="List of extracted Knowledge, Opinion, or Attribute statements.",
     )
 

@@ -1,6 +1,5 @@
 import asyncio
-import json
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 
 import polars as pl
 from pydantic import BaseModel, ValidationError
@@ -45,6 +44,7 @@ def validate_workflow(
     available_output_models: Dict[
         str, type[BaseModel]
     ],  # Added for checking parsable tasks
+    # available_input_formatters: Optional[Dict[str, Callable[[Dict[str, Any]], str]]] = None # Optional validation
 ) -> bool:
     """
     Validates a workflow definition against available prompts and output models.
@@ -169,6 +169,9 @@ async def execute_workflow(
     workflow: List[WorkflowStage],  # Updated type hint
     available_prompts: Dict[str, Tuple[str, str]],  # Map: name -> (text, version)
     available_output_models: Dict[str, type[BaseModel]],  # Added for parsing
+    available_input_formatters: Optional[
+        Dict[str, Callable[[Dict[str, Any]], str]]
+    ] = None,  # Added input formatters
 ) -> Dict[str, Any]:
     """Executes a defined workflow for a single model and initial input.
     Parses and validates the output of each task using corresponding Pydantic models
@@ -182,6 +185,9 @@ async def execute_workflow(
         workflow: List of stage definitions.
         available_prompts: Mapping of prompt module names to (prompt_text, version).
         available_output_models: Mapping of prompt module names to Pydantic models.
+        available_input_formatters: Optional mapping of prompt module names to functions
+                                    that format the input dictionary into a string.
+                                    If None or a task_id is missing, defaults to json.dumps.
 
     Returns:
         A dictionary containing mappings from task_id (prompt name) to its result.
@@ -264,22 +270,50 @@ async def execute_workflow(
                     skip_task = True
                 else:
                     # Serialize the collected inputs (could include RAW_INPUT_PLACEHOLDER key)
-                    try:
-                        inputs_as_dicts = {}
-                        for k, v in inputs_to_serialize.items():
-                            if isinstance(v, BaseModel):
-                                inputs_as_dicts[k] = v.model_dump()
-                            else:
-                                inputs_as_dicts[k] = (
-                                    v  # Includes raw input string if present
+                    # --- Input Formatting ---
+                    formatter = (
+                        available_input_formatters.get(task_id)
+                        if available_input_formatters
+                        else None
+                    )
+                    if formatter:
+                        # 1. Use the custom formatter if provided
+                        try:
+                            current_task_input_str = formatter(inputs_to_serialize)
+                        except Exception as e:
+                            error_msg = f"ERROR: Custom input formatter for task '{task_id}' failed: {e}"
+                            print(error_msg)
+                            skip_task = True
+                    else:
+                        # 2. No custom formatter provided
+                        num_inputs = len(inputs_to_serialize)
+                        if num_inputs == 0:
+                            # Task takes no input
+                            current_task_input_str = ""
+                        elif num_inputs == 1:
+                            # Task takes exactly one input
+                            try:
+                                # Get the single value (key doesn't matter)
+                                single_input_value = next(
+                                    iter(inputs_to_serialize.values())
                                 )
-                        current_task_input_str = json.dumps(
-                            inputs_as_dicts, indent=2, ensure_ascii=False
-                        )
-                    except TypeError as e:
-                        error_msg = f"ERROR: Failed to serialize inputs for task '{task_id}' in stage {stage_num}: {e}"
-                        print(error_msg)
-                        skip_task = True
+                                if isinstance(single_input_value, BaseModel):
+                                    # Serialize Pydantic model to compact JSON
+                                    current_task_input_str = (
+                                        single_input_value.model_dump_json(indent=None)
+                                    )
+                                else:
+                                    # Use the string representation for other types
+                                    current_task_input_str = str(single_input_value)
+                            except Exception as e:
+                                error_msg = f"ERROR: Failed to process single input for task '{task_id}': {e}"
+                                print(error_msg)
+                                skip_task = True
+                        else:  # num_inputs > 1
+                            # Task takes multiple inputs, but no formatter defined - Ambiguous!
+                            error_msg = f"ERROR: Ambiguous Input Formatting - Task '{task_id}' requires {num_inputs} inputs but no specific formatter is defined."
+                            print(error_msg)
+                            skip_task = True
 
             # 2. Create task coroutine if not skipped
             if skip_task:
@@ -370,6 +404,9 @@ async def run_workflow_on_samples(
     available_prompts: Dict[str, Tuple[str, str]],  # Map: name -> (text, version)
     available_output_models: Dict[str, type[BaseModel]],  # Pass models for validation
     input_column: str = "formatted_context",  # Allow specifying input column
+    available_input_formatters: Optional[
+        Dict[str, Callable[[Dict[str, Any]], str]]
+    ] = None,  # Added
 ) -> List[Dict[str, Any]]:
     """
     Runs a defined workflow concurrently across multiple samples and models.
@@ -382,6 +419,7 @@ async def run_workflow_on_samples(
         available_prompts: Map of prompt names to (prompt_text, version).
         available_output_models: Map of prompt names to Pydantic models.
         input_column: The column name in sample_df containing the initial input.
+        available_input_formatters: Optional map of prompt names to input formatting functions.
 
     Returns:
         A list of dictionaries, one per sample. Each dictionary contains:
@@ -408,6 +446,7 @@ async def run_workflow_on_samples(
                     workflow=workflow,
                     available_prompts=available_prompts,
                     available_output_models=available_output_models,  # Pass models
+                    available_input_formatters=available_input_formatters,  # Pass formatters
                 )
             )
             all_tasks.append(task)

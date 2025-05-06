@@ -1,17 +1,23 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import polars as pl
 from pydantic import BaseModel
+
+# Import utility
+# Import shared configurations to use as defaults
+from evaluation.config import (
+    AVAILABLE_INPUT_FORMATTERS,
+    AVAILABLE_OUTPUT_MODELS,
+    AVAILABLE_PROMPTS,
+)
 
 # Import the NEW orchestrator and the single prompt runner
 from user_embeddings.utils.llm.workflow_executor import (
     WorkflowStage,
     run_workflow_on_samples,
 )
-
-# Import utility
 
 # --- Shared Evaluation Helpers ---
 
@@ -92,8 +98,11 @@ async def run_and_parse_test_models(
     sample_df: pl.DataFrame,
     models_to_test: List[str],
     workflow: List[WorkflowStage],
-    available_prompts: Dict[str, Tuple[str, str]],
-    available_output_models: Dict[str, type[BaseModel]],
+    available_prompts: Dict[str, Tuple[str, str]] = AVAILABLE_PROMPTS,
+    available_output_models: Dict[str, type[BaseModel]] = AVAILABLE_OUTPUT_MODELS,
+    available_input_formatters: Dict[
+        str, Callable[[Dict[str, Any]], str]
+    ] = AVAILABLE_INPUT_FORMATTERS,
 ) -> List[Dict[str, Any]]:
     """
     Runs test models using the updated workflow orchestrator.
@@ -108,6 +117,7 @@ async def run_and_parse_test_models(
         available_prompts=available_prompts,
         available_output_models=available_output_models,
         input_column="formatted_context",
+        available_input_formatters=available_input_formatters,
     )
 
     # --- Process results to create judge input string from final stage outputs ---

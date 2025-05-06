@@ -7,11 +7,7 @@ import polars as pl
 from dotenv import load_dotenv
 
 # Import shared configurations
-from evaluation.config import (
-    AVAILABLE_OUTPUT_MODELS,
-    AVAILABLE_PROMPTS,
-    WORKFLOWS,
-)
+from evaluation.config import WORKFLOWS
 from evaluation.helpers.common_args import add_common_eval_args
 
 # Import shared and specific helpers
@@ -100,11 +96,19 @@ async def main():
     # --- Validate Workflow using the imported function ---
     # Use imported AVAILABLE_PROMPTS
     # Also pass available_output_models for validation of parsable tasks
+    # Validation now happens inside run_and_parse_test_models implicitly through run_workflow_on_samples -> execute_workflow?
+    # No, validate_workflow is still separate. We need the configs for it.
+    # Let's re-import them just for validation. This is a bit awkward.
+    # Alternative: Move validation inside run_and_parse_test_models?
+    # For now, re-import for validation.
+    from evaluation.config import AVAILABLE_OUTPUT_MODELS, AVAILABLE_PROMPTS
+
     is_valid = validate_workflow(
         workflow_name=selected_workflow_name,
         workflow_definition=selected_workflow,
         available_prompts=AVAILABLE_PROMPTS,
         available_output_models=AVAILABLE_OUTPUT_MODELS,
+        # available_input_formatters=AVAILABLE_INPUT_FORMATTERS, # Validation doesn't use formatters yet
     )
     if not is_valid:
         print("Workflow validation failed. Exiting.")
@@ -204,8 +208,7 @@ async def main():
         sample_df=sample_df,
         models_to_test=args.models,
         workflow=selected_workflow,
-        available_prompts=AVAILABLE_PROMPTS,
-        available_output_models=AVAILABLE_OUTPUT_MODELS,  # Pass models for executor use
+        # Arguments removed, using defaults from evaluation_utils.py
     )
 
     # 3. Run Judge Model Evaluation
