@@ -1,5 +1,5 @@
+import importlib.resources
 import logging
-from pathlib import Path
 from typing import Dict, Optional
 
 # Import utility shared or needed by these funcs
@@ -9,17 +9,19 @@ logger = logging.getLogger(__name__)
 
 # Read the base judge prompt
 _JUDGE_BASE_PROMPT_TEXT = ""
-_PROJECT_ROOT = (
-    Path(__file__).resolve().parents[4]
-)  # src/user_embeddings/utils/judge_prompts -> user_embeddings (project root)
-_JUDGE_BASE_TXT_PATH = _PROJECT_ROOT / "prompts" / "judge_base.txt"
 
 try:
-    with open(_JUDGE_BASE_TXT_PATH, "r", encoding="utf-8") as f:
-        _JUDGE_BASE_PROMPT_TEXT = f.read().strip()
+    _JUDGE_BASE_PROMPT_TEXT = (
+        importlib.resources.files(
+            "user_embeddings"
+        )  # Assuming 'user_embeddings' is a package
+        .joinpath("prompts", "judge_base.txt")
+        .read_text(encoding="utf-8")
+        .strip()
+    )
 except Exception as e:
     logger.error(
-        f"Error reading base judge prompt file at {_JUDGE_BASE_TXT_PATH}: {e}. Proceeding without it."
+        f"Error reading base judge prompt file using importlib.resources: {e}. Proceeding without it."
     )
     raise e
 
@@ -87,7 +89,9 @@ def parse_judge_output(judge_response: str) -> Optional[Dict[str, str]]:
     parsed_json = parse_llm_json_output(judge_response, expect_type=dict)
 
     if parsed_json is None:
-        logger.error(f"Error parsing constraint judge output. Raw output:\n{judge_response}")
+        logger.error(
+            f"Error parsing constraint judge output. Raw output:\n{judge_response}"
+        )
         return None
 
     if not isinstance(parsed_json, dict):

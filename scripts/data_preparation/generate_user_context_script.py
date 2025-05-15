@@ -7,14 +7,12 @@ from typing import List
 import dask.dataframe as dd
 import pandas as pd
 import pyarrow as pa
-import pytest
+
+# import pytest # Removed pytest
 from dask.distributed import Client, LocalCluster, progress
 
 from user_embeddings.utils.data_loading.dask_processing import generate_user_context
 
-# No longer need zst_io imports here if helper handles reading/chunking
-# from utils.zst_io import read_single_zst_ndjson_chunked
-# from utils.zst_io import DEFAULT_CHUNK_SIZE
 # Import the helper function from its new location
 from .helpers.data_loading import load_or_create_cached_ddf
 
@@ -29,11 +27,13 @@ if workspace_root not in sys.path:  # Ensure root is in path for src import
 # Adjust these paths if your data structure is different
 COMMENTS_PATH = os.path.join(workspace_root, "data/reddit/comments")
 SUBMISSIONS_PATH = os.path.join(workspace_root, "data/reddit/submissions")
-CACHE_DIR = os.path.join(workspace_root, "data/test_cache")  # Cache directory
+CACHE_DIR = os.path.join(
+    workspace_root, "data/script_cache"
+)  # Cache directory for script
 
 # Set to None to sample users, or a list of specific usernames.
-TEST_USER = None
-NUM_TEST_USERS = 10  # Define how many users to sample and test
+TARGET_USER = None  # Renamed from TEST_USER
+NUM_TARGET_USERS = 10  # Renamed from NUM_TEST_USERS
 
 # Ensure cache directory exists
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -46,7 +46,7 @@ logging.basicConfig(
 )
 
 # --- Dask Cluster Setup ---
-# Setup local cluster before fixtures might use it implicitly
+# Setup local cluster
 logger.info("Setting up local Dask cluster...")
 # Use slightly fewer workers than cores initially, distribute memory
 cluster = LocalCluster(n_workers=5, threads_per_worker=2, memory_limit="20GB")
@@ -54,13 +54,12 @@ client = Client(cluster)
 logger.info(f"Dask dashboard link: {client.dashboard_link}")
 
 
-# --- Fixtures (Optional but recommended for setup/teardown) ---
-@pytest.fixture(scope="module")
-def comments_ddf():
+# --- Data Loading Functions (formerly fixtures) ---
+def load_comments_ddf():
     """Loads the comments Dask DataFrame using a cached Parquet file with full schema."""
     if not os.path.exists(COMMENTS_PATH):
         logger.error(f"Comments directory not found: {COMMENTS_PATH}")
-        pytest.fail(f"Comments directory not found: {COMMENTS_PATH}")
+        raise FileNotFoundError(f"Comments directory not found: {COMMENTS_PATH}")
 
     # Define full meta based on docs/schema.md (Comments)
     meta_comments = pd.DataFrame(
@@ -101,12 +100,11 @@ def comments_ddf():
     )
 
 
-@pytest.fixture(scope="module")
-def submissions_ddf():
+def load_submissions_ddf():
     """Loads the submissions Dask DataFrame using a cached Parquet file with full schema."""
     if not os.path.exists(SUBMISSIONS_PATH):
         logger.error(f"Submissions directory not found: {SUBMISSIONS_PATH}")
-        pytest.fail(f"Submissions directory not found: {SUBMISSIONS_PATH}")
+        raise FileNotFoundError(f"Submissions directory not found: {SUBMISSIONS_PATH}")
 
     # Define full meta based on docs/schema.md (Submissions)
     meta_submissions = pd.DataFrame(
@@ -156,7 +154,9 @@ def submissions_ddf():
     )
 
 
-def _sample_test_users(comments_ddf: dd.DataFrame, num_users_to_find: int) -> List[str]:
+def _sample_target_users(
+    comments_ddf: dd.DataFrame, num_users_to_find: int
+) -> List[str]:
     """Samples the comments DataFrame to find a list of valid user authors."""
     logger.info(f"Sampling comments to find {num_users_to_find} valid users...")
     sampled_users = []
@@ -200,7 +200,7 @@ def _sample_test_users(comments_ddf: dd.DataFrame, num_users_to_find: int) -> Li
 
     except KeyError as e:
         logger.error(f"Failed to find column '{e}' in comments sample.")
-        raise  # Re-raise the error to be caught by the test
+        raise  # Re-raise the error to be caught by the script
     except Exception as e:
         logger.error(f"Failed to sample users from comments: {e}")
         logger.exception("An error occurred while sampling users")
@@ -209,7 +209,7 @@ def _sample_test_users(comments_ddf: dd.DataFrame, num_users_to_find: int) -> Li
     return sampled_users
 
 
-def _run_and_validate_user_test(
+def _run_and_validate_user_processing(
     user_id: str,
     comments_ddf: dd.DataFrame,
     submissions_ddf: dd.DataFrame,
@@ -240,10 +240,12 @@ def _run_and_validate_user_test(
             f"Computation finished for user {user_id}. Result shape: {result_pdf.shape}. Time: {end_time - start_time:.2f}s"
         )
 
-        # --- Assertions on the result ---
-        assert isinstance(result_pdf, pd.DataFrame), (
-            f"Result for user {user_id} should be a Pandas DataFrame after compute()"
-        )
+        # --- Validations on the result ---
+        if not isinstance(result_pdf, pd.DataFrame):
+            logger.error(
+                f"Result for user {user_id} is not a Pandas DataFrame after compute(). Type: {type(result_pdf)}"
+            )
+            return False
 
         # Check if expected columns exist in the result
         expected_cols = ["submission_id", "formatted_context", "user_comment_ids"]
@@ -253,33 +255,32 @@ def _run_and_validate_user_test(
         if missing_result_cols:
             err_msg = f"Result DataFrame for user {user_id} missing expected columns: {missing_result_cols}"
             logger.error(f"{err_msg}")
-            assert False, err_msg  # Fail the specific user test
+            return False
 
         logger.info(f"Result DataFrame head for user {user_id}:\n{result_pdf.head()}")
 
-        # --- Save test artifact ---
+        # --- Save script artifact ---
         os.makedirs(output_dir, exist_ok=True)  # Ensure the directory exists
         # Sanitize username for filename
         safe_username = "".join(c if c.isalnum() else "_" for c in user_id)
-        output_filename = f"test_output_{safe_username}.csv"
+        output_filename = f"user_context_output_{safe_username}.csv"
         output_path = os.path.join(output_dir, output_filename)
         try:
-            logger.info(f"Saving test result artifact for {user_id} to: {output_path}")
+            logger.info(
+                f"Saving script result artifact for {user_id} to: {output_path}"
+            )
             result_pdf.to_csv(output_path, index=False)
             logger.info("Artifact saved successfully.")
         except Exception as e:
             logger.warning(
-                f"Failed to save test artifact for {user_id} to {output_path}: {e}"
+                f"Failed to save script artifact for {user_id} to {output_path}: {e}"
             )
-            success = False  # Mark test as partially failed if save fails
+            success = False  # Mark as partially failed if save fails
 
-        logger.info(f"--- Test for user {user_id} completed successfully. ---")
+        logger.info(f"--- Processing for user {user_id} completed successfully. ---")
 
     except ValueError as e:
         logger.error(f"generate_user_context raised ValueError for user {user_id}: {e}")
-        success = False
-    except AssertionError as e:  # Catch assertion errors explicitly
-        logger.error(f"Assertion failed for user {user_id}: {e}")
         success = False
     except Exception as e:
         logger.error(
@@ -291,62 +292,65 @@ def _run_and_validate_user_test(
     return success
 
 
-# --- Test Function ---
-def test_generate_context_sample_user(
-    comments_ddf: dd.DataFrame,
-    submissions_ddf: dd.DataFrame,
-    # caplog: pytest.LogCaptureFixture -> No longer needed
-):
+# --- Main Script Function ---
+def main():
     """
-    Tests the generate_user_context function for multiple sampled users.
+    Main function to generate user context for multiple sampled users.
     """
-    # caplog.set_level(logging.INFO) -> No longer needed
-
-    test_users_to_process = []
-    if TEST_USER is None:
+    users_to_process = []
+    if TARGET_USER is None:
         try:
-            test_users_to_process = _sample_test_users(comments_ddf, NUM_TEST_USERS)
-            if not test_users_to_process:
-                pytest.skip(
-                    "Could not find any non-deleted users in the sample. Skipping test."
+            # Load comments_ddf just for sampling if TARGET_USER is None
+            comments_for_sampling = load_comments_ddf()
+            if comments_for_sampling is None:
+                logger.error("Failed to load comments for sampling users. Exiting.")
+                return
+            users_to_process = _sample_target_users(
+                comments_for_sampling, NUM_TARGET_USERS
+            )
+            if not users_to_process:
+                logger.warning(
+                    "Could not find any non-deleted users in the sample. No users to process."
                 )
+                return  # Exit if no users found
         except Exception as e:
-            pytest.fail(f"Failed during user sampling: {e}")
+            logger.error(f"Failed during user sampling: {e}")
+            return  # Exit on sampling failure
 
-    elif isinstance(TEST_USER, list):
-        logger.info(f"Using predefined list of test users: {TEST_USER}")
-        test_users_to_process = TEST_USER
-    elif isinstance(TEST_USER, str):
-        logger.info(f"Using predefined single test user: {TEST_USER}")
-        test_users_to_process = [TEST_USER]
+    elif isinstance(TARGET_USER, list):
+        logger.info(f"Using predefined list of target users: {TARGET_USER}")
+        users_to_process = TARGET_USER
+    elif isinstance(TARGET_USER, str):
+        logger.info(f"Using predefined single target user: {TARGET_USER}")
+        users_to_process = [TARGET_USER]
     else:
-        pytest.fail(
-            f"Invalid TEST_USER type: {type(TEST_USER)}. Should be None, list, or str."
+        logger.error(
+            f"Invalid TARGET_USER type: {type(TARGET_USER)}. Should be None, list, or str."
         )
+        return
 
-    # Basic check if dataframes loaded (pytest fixtures handle load errors)
-    assert comments_ddf is not None
-    assert submissions_ddf is not None
+    # Load main Dask DataFrames
+    comments_ddf = load_comments_ddf()
+    submissions_ddf = load_submissions_ddf()
+
+    if comments_ddf is None or submissions_ddf is None:
+        logger.error(
+            "Failed to load comments or submissions Dask DataFrames. Exiting script."
+        )
+        return
 
     # Ensure required columns exist before calling the function
-    # Get expected columns directly from the DataFrames loaded by fixtures,
-    # as they should now conform to the full schema defined within those fixtures.
     required_comment_cols = list(comments_ddf.columns)
     required_submission_cols = list(submissions_ddf.columns)
 
-    # Get actual columns from loaded Dask DataFrames (redundant now, but keep for clarity)
     actual_comment_cols = comments_ddf.columns
     actual_submission_cols = submissions_ddf.columns
 
-    # Add log statements for debugging column presence after loading
     logger.info(f"Expected Comment Columns (from Dask DF): {required_comment_cols}")
-    # logger.info(f"Actual Comment Columns: {actual_comment_cols}") # Redundant
     logger.info(
         f"Expected Submission Columns (from Dask DF): {required_submission_cols}"
     )
-    # logger.info(f"Actual Submission Columns: {actual_submission_cols}") # Redundant
 
-    # Re-check for missing columns (this check is now slightly trivial but good practice)
     missing_comment_cols = [
         col for col in required_comment_cols if col not in actual_comment_cols
     ]
@@ -354,30 +358,34 @@ def test_generate_context_sample_user(
         col for col in required_submission_cols if col not in actual_submission_cols
     ]
 
-    assert not missing_comment_cols, (
-        f"Comments Dask DataFrame missing expected columns: {missing_comment_cols}"
-    )
-    assert not missing_submission_cols, (
-        f"Submissions Dask DataFrame missing expected columns: {missing_submission_cols}"
-    )
+    if missing_comment_cols:
+        logger.error(
+            f"Comments Dask DataFrame missing expected columns: {missing_comment_cols}. Exiting."
+        )
+        return
+    if missing_submission_cols:
+        logger.error(
+            f"Submissions Dask DataFrame missing expected columns: {missing_submission_cols}. Exiting."
+        )
+        return
 
     # --- Loop through users and execute the function ---
-    all_tests_passed = True
-    test_output_dir = os.path.join(workspace_root, "data/test_results")  # Define once
+    all_processing_successful = True
+    script_output_dir = os.path.join(
+        workspace_root, "data/script_results"
+    )  # Define once
 
-    for user_index, current_test_user in enumerate(test_users_to_process):
-        # Call the helper function for the single user test
-        user_test_passed = _run_and_validate_user_test(
-            user_id=current_test_user,
+    for user_index, current_target_user in enumerate(users_to_process):
+        user_processing_passed = _run_and_validate_user_processing(
+            user_id=current_target_user,
             comments_ddf=comments_ddf,
             submissions_ddf=submissions_ddf,
-            output_dir=test_output_dir,
+            output_dir=script_output_dir,
         )
-        if not user_test_passed:
-            all_tests_passed = False
-            # Decide whether to continue testing other users or stop
+        if not user_processing_passed:
+            all_processing_successful = False
+            # Decide whether to continue processing other users or stop
             # For now, let's continue to see all failures
-            # To stop on first failure: break
 
     # --- Dask Cluster Teardown (after all users) ---
     logger.info("\nShutting down Dask client and cluster...")
@@ -385,14 +393,21 @@ def test_generate_context_sample_user(
     cluster.close()
     logger.info("Dask client and cluster shut down.")
 
-    # Final assertion based on whether all user tests passed
-    assert all_tests_passed, "One or more user context generation tests failed."
+    if all_processing_successful:
+        logger.info("All user context generation tasks completed successfully.")
+    else:
+        logger.warning(
+            "One or more user context generation tasks failed or had issues."
+        )
 
 
-# To run this test:
-# 1. Make sure you have pytest installed (`pip install pytest dask distributed pandas pyyaml pyarrow`)
-# 2. Ensure distributed is installed: `pip install distributed`
-# 3. Ensure your data is in `data/reddit/comments` and `data/reddit/submissions` (as parquet files generated by the cache mechanism)
-# 4. Leave TEST_USER as None to sample NUM_TEST_USERS, or provide a specific list/string.
-# 5. Navigate to your project root directory in the terminal.
-# 6. Run `pytest -s tests/test_dask_processing.py`. You should see the dashboard link printed and processing for multiple users.
+if __name__ == "__main__":
+    main()
+
+# To run this script:
+# 1. Make sure you have the necessary libraries installed (pandas, dask, distributed, pyarrow).
+# 2. Ensure your data is in `data/reddit/comments` and `data/reddit/submissions`.
+# 3. Configure TARGET_USER (None to sample, or a specific list/string) and NUM_TARGET_USERS.
+# 4. Navigate to your project root directory in the terminal.
+# 5. Run `python scripts/data_preparation/generate_user_context_script.py`.
+# You should see the dashboard link printed and processing for multiple users.

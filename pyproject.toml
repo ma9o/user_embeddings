@@ -33,6 +33,9 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["src"] 
 
+[tool.setuptools.package-data]
+"user_embeddings.prompts" = ["*.txt", "**/*.txt"] 
+
 [dependency-groups]
 dev = [
     "ruff>=0.11.5",

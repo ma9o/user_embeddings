@@ -9,7 +9,6 @@ import dask.dataframe as dd
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 
 logger = logging.getLogger(__name__)
 
@@ -343,7 +342,9 @@ def _validate_and_cast_ddf(
                 )
 
         if types_to_cast:
-            logger.info(f"Casting {data_type_name} columns to match meta: {types_to_cast}")
+            logger.info(
+                f"Casting {data_type_name} columns to match meta: {types_to_cast}"
+            )
             # Apply casts - Dask handles this lazily
             ddf = ddf.astype(types_to_cast)
 
@@ -353,7 +354,7 @@ def _validate_and_cast_ddf(
         )
         logger.error(f"Dask dtypes: {ddf.dtypes}")
         logger.error(f"Meta dtypes dict: {meta_dtypes_dict}")
-        pytest.fail(f"Dtype casting setup failed for {data_type_name}: {e}")
+        raise ValueError(f"Dtype casting setup failed for {data_type_name}: {e}")
 
     # Final check on columns vs meta after all operations
     final_columns = list(ddf.columns)
@@ -366,9 +367,13 @@ def _validate_and_cast_ddf(
         logger.error(f"{mismatch_msg}")
         logger.error(f"Dask dtypes: {ddf.dtypes}")
         logger.error(f"Meta dtypes: {meta_df.dtypes}")
-        logger.error(f"Columns in DDF but not meta: {set(final_columns) - set(meta_columns)}")
-        logger.error(f"Columns in meta but not DDF: {set(meta_columns) - set(final_columns)}")
-        pytest.fail(mismatch_msg)  # Use pytest.fail in test helpers
+        logger.error(
+            f"Columns in DDF but not meta: {set(final_columns) - set(meta_columns)}"
+        )
+        logger.error(
+            f"Columns in meta but not DDF: {set(meta_columns) - set(final_columns)}"
+        )
+        raise ValueError(mismatch_msg)
 
     logger.info(
         f"Successfully validated and cast Dask DataFrame for {data_type_name}. Final Columns: {list(ddf.columns)}, Final Dtypes: {ddf.dtypes.to_dict()}"
@@ -429,7 +434,9 @@ def load_or_create_cached_ddf(
     ddf = None  # Initialize ddf
 
     if os.path.exists(cache_filepath):
-        logger.info(f"Loading {data_type_name} from cached Parquet file: {cache_filepath}")
+        logger.info(
+            f"Loading {data_type_name} from cached Parquet file: {cache_filepath}"
+        )
         try:
             start_time = time.time()
             # Load from cache
@@ -496,7 +503,9 @@ def load_or_create_cached_ddf(
                 ddf = _validate_and_cast_ddf(
                     ddf_loaded, meta_df, pa_schema, data_type_name
                 )
-                logger.info(f"Validated newly created cache. Final Columns: {ddf.columns}")
+                logger.info(
+                    f"Validated newly created cache. Final Columns: {ddf.columns}"
+                )
                 # return ddf
             except Exception as e:
                 logger.error(
