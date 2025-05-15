@@ -4,9 +4,6 @@ This document describes the structure and format of the Pushshift Reddit dataset
 
 **Source Paper:** Baumgartner, J., Zannettou, S., Keegan, B., Squire, M., & Blackburn, J. (2020). The Pushshift Reddit Dataset. *Proceedings of the International AAAI Conference on Web and Social Media*, *14*(1), 830-839. ([arXiv:2001.08435](https://arxiv.org/abs/2001.08435))
 
-**Data Access:** Monthly dumps are available at [https://files.pushshift.io/reddit/](https://files.pushshift.io/reddit/)
-
-**Citation:** If you use this dataset in your research, please cite the paper above and acknowledge Pushshift.
 
 ## File Organization
 
@@ -83,4 +80,3 @@ Each line in a comment file is a JSON object representing a single Reddit commen
 | `author_flair_text`    | String / Null     | Text content associated with the author's flair in the subreddit. Specific to the subreddit. `null` if none.                              |
 | *(Other fields)*      | *Varies*          | Reddit's API may include other fields not listed here.                                                                                    |
 
-This structure should provide a comprehensive overview for working with the Pushshift Reddit dataset dumps.

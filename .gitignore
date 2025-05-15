@@ -8,3 +8,4 @@ __pycache__/
 data/test_cache/
 repomix-output.xml
 *.egg-info/
+.ruff_cache/

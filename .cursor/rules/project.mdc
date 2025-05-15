@@ -12,12 +12,11 @@ alwaysApply: true
 
 Project folder structure:
 .
-├── data/              
+├── data/ # Not tracked, contains artifacts             
 ├── docs/
-├── notebooks/
-├── README.md
 ├── src/
-│   └── user_embeddings/
-│       └── utils/
-└── tests/
-    └── helpers/
+│   └── user_embeddings/ # Contains code shared between scripts and notebooks
+├── notebooks/
+└── scripts/
+    └── data_preparation/
+    └── evaluation/
