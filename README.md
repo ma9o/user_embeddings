@@ -1,6 +1,5 @@
 # Training User-LLM (Efficient LLM Contextualization with User Embeddings) on Vana's DataDAOs Conversational Dataset
 
-## Overview
 This project aims to leverage Vana’s DataDAOs private conversational datasets (Reddit, Telegram, ChatGPT) to outperform public alternatives (e.g., Reddit/Twitter PushShift). We produce two artifacts: a universal user-embedding model (for recall tasks) and an LLM personalization system (for precision tasks), showcasing the dataset’s value at different personalization stages.
 
 ## Project Goals
