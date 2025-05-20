@@ -29,11 +29,29 @@ Building on User-LLM, our incremental contributions include:
 The training pipeline comprises three independently trained components:
 
 #### 1. Item Encoder
+<!--
+Diagram 1  –  Contrastive alignment of chunk-vs-summary embeddings
+--------------------------------------------------------------
+* **Raw conversation chunk** → frozen **Qwen3-32B** → SUBJECT-centric summary.
+* Two parallel, frozen **NV-Embed-v2** encoders:
+  – **Summary path** embeds the summary → “summary embedding”.  
+  – **Chunk path** embeds the original chunk but adds a trainable **LoRA** adapter → “chunk embedding”.
+* A contrastive cross-entropy loss pulls the chunk embedding toward its own summary embedding and pushes it away from others.
+* Only the LoRA is updated; every large model stays frozen.
+-->
 ![Image 1](docs/images/1.png)
 
 Fine-tune the text encoder via distillation from Qwen3-32B, capturing SUBJECT-centric contributions from conversation chunks. The summarization prompts are optimized via automated prompt refinement like DSPy.
 
 #### 2. Sequence Encoder
+<!--
+Diagram 2  –  Sequence-level pre-training of an autoregressive encoder
+--------------------------------------------------------------------
+* A stream of chunks (1…N) runs through the same **NV-Embed-v2 + LoRA** encoder, yielding a sequence of summary embeddings.
+* A trainable **autoregressive encoder** (GPT-style) predicts the next summary embedding from the previous ones.
+* Cross-entropy loss trains the autoregressive weights (and optionally the LoRA) to model a user’s conversation history as an ordered series.
+* Outcome: a lightweight recurrent model that compresses many summaries into a single, context-aware “user state” vector.
+-->
 ![Image 2](docs/images/2.png)
 
 The autoregressive encoder compresses noisy user histories, surfacing predictive signals like Knowledge, Opinions, Attributes, Intents (KOAIs).
@@ -41,6 +59,16 @@ The autoregressive encoder compresses noisy user histories, surfacing predictive
 **Note**: Non-predictive KOAIs explicitly stated by SUBJECTs may be ignored intentionally (which might actually be desirable: POSIWID). For potentially predictive KOAIs at the end of the sequence we should anyway rely on RAG at test time, as per original findings.
 
 #### 3. Perceiver & Projector
+<!--
+Diagram 3  –  End-to-end question-answering with user embedding & RAG
+--------------------------------------------------------------------
+1. A **RAG pipeline** selects the relevant conversation chunks.
+2. Chunks → **NV-Embed-v2 + LoRA** → summary embeddings → **autoregressive encoder** → single **user embedding**.
+3. A small **Perceiver + Projector** injects that user embedding into **Qwen3-32B** along with the current **question**.
+4. Qwen3-32B produces an **answer**.
+5. A frozen **GPT-4o** critic scores the answer; its judgment drives a loss that fine-tunes only the lightweight adapters (LoRA, Perceiver/Projector, autoregressive encoder).
+Result: personalised answers with minimal trainable parameters while the large foundation models remain frozen.
+-->
 ![Image 3](docs/images/3.png)
 
 Here we train the perceiver for cross-attention, optimizing for diverse user prediction tasks evaluated by a high-quality, context-stuffed judge model.
