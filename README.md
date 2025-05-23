@@ -98,7 +98,7 @@ The autoregressive encoder compresses noisy user histories, surfacing predictive
 
 **Note**: Non-predictive KOAIs explicitly stated by SUBJECTs may be ignored intentionally (which might actually be desirable: POSIWID). For potentially predictive KOAIs at the end of the sequence we should anyway rely on RAG at test time, as per original findings.
 
-**Loss function**: Contrastive Predictive Coding InfoNCE: Here we compare the sequence embedding to positive and negative samples; need to train a projector too since they live in different spaces. (like in original paper, see 3.3)
+**Loss function**: Contrastive Predictive Coding-inspired InfoNCE: Here we compare the sequence embedding to positive and negative samples; need to train a projector too since they live in different spaces. (like in original paper, see 3.3)
 $$
 \mathcal{L}_t = -\log
 \frac{
@@ -120,6 +120,7 @@ K & & \text{total number of samples (1 positive + $K-1$ negatives).}
 \end{aligned}
 $$
 
+TIL: Cross-entropy loss >> MSE (reconstruction) bc of heteroskedasticity: Some users in the dataset will have very consistent, predictable conversation patterns (stable interests, consistent personality), while others will be more exploratory or erratic. With MSE, we'd penalize the model equally for "missing" both types of users, but InfoNCE adapts - it learns strong separations for predictable users and weaker (but still meaningful) preferences for unpredictable ones.
 
 #### 3. Perceiver & Projector
 <!--
@@ -148,6 +149,7 @@ Here we train the perceiver for cross-attention, optimizing for diverse user pre
     └── data_preparation/
     └── evaluation/
 ```
+
 ## Limitations & Future Work
 
 - Implement DSPy for prompt refinement (and program synthesis when available)
