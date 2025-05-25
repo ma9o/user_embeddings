@@ -100,12 +100,12 @@ The autoregressive encoder compresses noisy user histories, surfacing predictive
 
 **Loss function**: Contrastive Predictive Coding-inspired InfoNCE: Here we compare the sequence embedding to positive and negative samples; need to train a projector too since they live in different spaces. (like in original paper, see 3.3)
 
-$$
+```math
 \mathcal{L}_t = -\log
 \frac{\exp(\mathrm{sim}(c_t, z_{t+1}) / \tau)}{\exp(\mathrm{sim}(c_t, z_{t+1}) / \tau)+ \displaystyle\sum_{j=1}^{K-1} \exp(\mathrm{sim}(c_t, z_j^-) / \tau)}
-$$
+```
 
-$$
+```math
 \begin{aligned}
 c_t &= f_{\mathrm{AR}}(z_{1:t}) & \text{context representation at time }t,\\
 z_{t+1} & & \text{positive sample: the next snippet's embedding},\\
@@ -114,7 +114,7 @@ z_{t+1} & & \text{positive sample: the next snippet's embedding},\\
 \tau &> 0 & \text{temperature hyperparameter},\\
 K & & \text{total number of samples (1 positive + $K-1$ negatives).}
 \end{aligned}
-$$
+```
 
 TIL: Cross-entropy loss >> MSE (reconstruction) bc of heteroskedasticity: Some users in the dataset will have very consistent, predictable conversation patterns (stable interests, consistent personality), while others will be more exploratory or erratic. With MSE, we'd penalize the model equally for "missing" both types of users, but InfoNCE adapts - it learns strong separations for predictable users and weaker (but still meaningful) preferences for unpredictable ones.
 
